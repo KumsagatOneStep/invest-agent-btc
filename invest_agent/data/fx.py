@@ -1,3 +1,4 @@
+import math
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -25,7 +26,7 @@ def usd_kzt(now: datetime, conn: sqlite3.Connection, http: httpx.Client) -> floa
         resp = http.get(URL)
         resp.raise_for_status()
         rate = float(resp.json()["rates"]["KZT"])
-        if not rate > 0:
+        if not (math.isfinite(rate) and rate > 0):
             raise ValueError("non-positive rate")
     except (httpx.HTTPError, KeyError, ValueError, TypeError):
         return cached[1] if cached else None

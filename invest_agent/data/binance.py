@@ -67,6 +67,8 @@ class BinanceClient:
                     "limit": PAGE_LIMIT,
                 },
             )
+            if not isinstance(rows, list):
+                raise BinanceError(f"{symbol}: klines response is not a list")
             try:
                 for r in rows:
                     if r[6] > end_ms:
@@ -78,7 +80,7 @@ class BinanceClient:
                             float(r[5]), float(r[7]),
                         )
                     )  # fmt: skip
-            except (KeyError, IndexError, TypeError, ValueError) as e:
+            except (KeyError, IndexError, TypeError, ValueError, OverflowError) as e:
                 raise BinanceError(f"{symbol}: malformed klines response") from e
             if len(rows) < PAGE_LIMIT:
                 break
@@ -106,6 +108,6 @@ class BinanceClient:
                     float(f["LOT_SIZE"]["stepSize"]),
                     float(notional["minNotional"]),
                 )
-        except (KeyError, IndexError, TypeError, ValueError, AttributeError) as e:
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError, AttributeError) as e:
             raise BinanceError("malformed exchangeInfo response") from e
         return rules

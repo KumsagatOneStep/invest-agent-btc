@@ -53,3 +53,9 @@ def test_fx_rejects_non_positive_rate():
     usd_kzt(NOW, c, http)
     respx.get(URL).mock(return_value=httpx.Response(200, json={"rates": {"KZT": -1}}))
     assert usd_kzt(NOW + timedelta(days=2), c, http) == 510.5
+
+
+@respx.mock
+def test_fx_rejects_infinite_rate():
+    respx.get(URL).mock(return_value=httpx.Response(200, text='{"rates": {"KZT": Infinity}}'))
+    assert usd_kzt(NOW, conn(), httpx.Client()) is None

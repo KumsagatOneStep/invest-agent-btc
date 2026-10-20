@@ -141,3 +141,22 @@ def test_exchange_info_without_symbols_raises_binance_error():
     client, _ = make_client()
     with pytest.raises(BinanceError):
         client.symbol_rules()
+
+
+@respx.mock
+def test_out_of_range_timestamp_raises_binance_error():
+    row = kline(0)
+    row[0] = 10**17
+    respx.get(f"{BASE}/api/v3/klines").mock(return_value=httpx.Response(200, json=[row]))
+    client, _ = make_client()
+    with pytest.raises(BinanceError):
+        client.klines("BTCUSDT", "1h", T0, T0 + timedelta(hours=5))
+
+
+@pytest.mark.parametrize("body", [{}, None])
+@respx.mock
+def test_non_list_klines_body_raises_binance_error(body):
+    respx.get(f"{BASE}/api/v3/klines").mock(return_value=httpx.Response(200, json=body))
+    client, _ = make_client()
+    with pytest.raises(BinanceError):
+        client.klines("BTCUSDT", "1h", T0, T0 + timedelta(hours=5))
