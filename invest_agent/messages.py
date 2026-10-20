@@ -170,7 +170,8 @@ def _book_block(title: str, s: BookStats, usd_kzt: float | None) -> str:
         f"Сигналов {s.n_signals}, вошли {s.n_entered}, отменены {s.n_expired}\n"
         f"Прибыльных {s.win_rate * 100:.0f}%, средняя прибыль {s.avg_win:.2f}, "
         f"средний убыток {s.avg_loss:.2f}, profit factor {pf}\n"
-        f"Итого {_usd_kzt(s.net_usdt, usd_kzt)}, макс. просадка {s.max_dd * 100:.1f}%"
+        f"Итого {_usd_kzt(s.net_usdt, usd_kzt)}, "
+        f"макс. просадка по закрытым сделкам {s.max_dd * 100:.1f}%"
     )
 
 
@@ -198,7 +199,7 @@ def weekly_message(
         "<b>Критерии перехода на деньги</b>\n"
         f"≥ 60 дней: {mark(criteria.days_ok)}; ≥ 100 сделок: {mark(criteria.trades_ok)}; "
         f"прибыль: {mark(criteria.profit_ok)}; лучше BTC: {mark(criteria.beats_btc_ok)}; "
-        f"просадка ≤ 15%: {mark(criteria.dd_ok)}\n"
+        f"просадка ≤ 15% (с открытыми позициями): {mark(criteria.dd_ok)}\n"
         + ("Критерии выполнены." if criteria.all_ok else "Критерии не выполнены.")
         + (f" (сделок {d['closed']}, дней {d['days']:.0f})" if "closed" in d else "")
     )

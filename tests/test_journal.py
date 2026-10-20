@@ -181,3 +181,8 @@ def test_signal_roundtrip():
     assert j.signal(j.add_signal(sig("ETHUSDT"), "v1")) == sig("ETHUSDT")
     with pytest.raises(KeyError):
         j.signal(999)
+
+
+def test_connect_sets_busy_timeout(tmp_path):
+    conn = connect(tmp_path / "j.sqlite")
+    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 60_000

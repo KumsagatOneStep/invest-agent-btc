@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from invest_agent.backtest.engine import Period, btc_hold_pct
 from invest_agent.config import Settings
-from invest_agent.data.candles import CandleStore
+from invest_agent.data.candles import CandleStore, last_marks
 from invest_agent.journal import Journal
 
 GOLIVE_DAYS = 60
@@ -16,7 +16,8 @@ _CLOSED = "('stop','target','time')"
 class BookStats:
     """n_signals/n_entered/n_expired — по времени сигнала, без отклонённых лимитами;
     остальное — по закрытым сделкам с выходом в периоде. avg_loss отрицательный;
-    profit_factor = inf без убытков; max_dd — доля от пика по закрытым сделкам.
+    profit_factor = inf без убытков; max_dd — доля от пика только по закрытым сделкам
+    (открытые позиции не видны; для критериев см. golive_check).
     """
 
     n_signals: int
@@ -123,7 +124,11 @@ def btc_hold_return(store: CandleStore, since: datetime, until: datetime) -> flo
 
 
 def golive_check(journal: Journal, store: CandleStore, now: datetime) -> Criteria:
-    """Критерии перехода по основному портфелю, текущему этапу."""
+    """Критерии перехода по основному портфелю, текущему этапу.
+
+    Просадка = max(по закрытым сделкам, текущая от максимума этапа с учётом открытых позиций
+    по отметкам): закрытые сделки не должны скрывать позиции в минусе.
+    """
     b = journal.book("main")
     if b.stage_started_at is None or b.start_equity <= 0:
         return Criteria(False, False, False, False, False, {"stage_started": False})
@@ -133,17 +138,23 @@ def golive_check(journal: Journal, store: CandleStore, now: datetime) -> Criteri
         f"SELECT COUNT(*) FROM positions WHERE book='main' AND stage=? AND status IN {_CLOSED}",
         (b.stage,),
     ).fetchone()[0]
+    marks = last_marks(store, {p.symbol for p in journal.active_positions("main")}, now)
+    equity = journal.equity("main", marks)
+    peak = max(b.peak, equity)
+    dd_now = 1 - equity / peak if peak > 0 else 0.0
+    max_dd = max(s.max_dd, dd_now)
     days = (now - b.stage_started_at).total_seconds() / 86400
     ret = s.net_usdt / b.start_equity
     btc = btc_hold_return(store, b.stage_started_at, now)
     details = {"btc_missing": btc is None, "days": days, "closed": n_closed, "net_usdt": s.net_usdt, "return": ret,
-               "btc_return": btc, "max_dd": s.max_dd}  # fmt: skip
+               "btc_return": btc, "max_dd": max_dd, "max_dd_closed": s.max_dd,
+               "dd_now": dd_now}  # fmt: skip
     return Criteria(
         days_ok=days >= GOLIVE_DAYS,
         trades_ok=n_closed >= GOLIVE_TRADES,
         profit_ok=s.net_usdt > 0,
         beats_btc_ok=btc is not None and ret > btc,
-        dd_ok=s.max_dd <= GOLIVE_MAX_DD,
+        dd_ok=max_dd <= GOLIVE_MAX_DD,
         details=details,
     )
 

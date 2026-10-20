@@ -74,11 +74,46 @@ def test_451_raises_immediately():
 
 
 @respx.mock
-def test_network_error_raises_binance_error():
-    respx.get(f"{BASE}/api/v3/klines").mock(side_effect=httpx.ConnectError("boom"))
-    client, _ = make_client()
+def test_network_error_retried_then_raises_binance_error():
+    route = respx.get(f"{BASE}/api/v3/klines").mock(side_effect=httpx.ConnectError("boom"))
+    client, sleeps = make_client()
     with pytest.raises(BinanceError):
         client.klines("BTCUSDT", "1h", T0, T0 + timedelta(hours=5))
+    assert route.call_count == 4
+    assert sleeps == [1, 2, 4]
+
+
+@respx.mock
+def test_timeout_recovers_on_retry():
+    respx.get(f"{BASE}/api/v3/klines").mock(
+        side_effect=[httpx.ReadTimeout("slow"), httpx.Response(200, json=[kline(0)])]
+    )
+    client, sleeps = make_client()
+    assert len(client.klines("BTCUSDT", "1h", T0, T0 + timedelta(hours=5))) == 1
+    assert sleeps == [1]
+
+
+@respx.mock
+@pytest.mark.parametrize("header,expected", [("10", 10.0), ("0", 1), ("bad", 1), ("999", 60.0)])
+def test_429_honours_retry_after(header, expected):
+    respx.get(f"{BASE}/api/v3/klines").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": header}),
+            httpx.Response(200, json=[kline(0)]),
+        ]
+    )
+    client, sleeps = make_client()
+    client.klines("BTCUSDT", "1h", T0, T0 + timedelta(hours=5))
+    assert sleeps == [expected]
+
+
+@respx.mock
+def test_other_4xx_not_retried():
+    route = respx.get(f"{BASE}/api/v3/klines").mock(return_value=httpx.Response(400))
+    client, sleeps = make_client()
+    with pytest.raises(BinanceError):
+        client.klines("BTCUSDT", "1h", T0, T0 + timedelta(hours=5))
+    assert route.call_count == 1 and sleeps == []
 
 
 def symbol(name, quote="USDT", status="TRADING", spot=True, notional_filter="NOTIONAL"):

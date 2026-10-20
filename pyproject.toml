@@ -7,17 +7,17 @@ name = "invest-agent"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "httpx",
-    "pandas",
-    "aiogram>=3,<4",
+    "httpx>=0.28,<0.29",
+    "pandas>=3.0,<4",
+    "aiogram>=3.31,<4",
     "apscheduler>=3.10,<4",
-    "anthropic",
-    "pydantic>=2",
-    "pydantic-settings>=2",
+    "anthropic>=1.15,<2",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.16,<3",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "respx", "ruff"]
+dev = ["pytest>=9,<10", "pytest-asyncio>=1.4,<2", "respx>=0.23,<0.24", "ruff>=0.17,<0.18"]
 
 [tool.setuptools]
 packages = ["invest_agent", "invest_agent.data", "invest_agent.strategies", "invest_agent.backtest", "invest_agent.llm"]

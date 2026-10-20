@@ -8,10 +8,10 @@ from datetime import UTC, datetime, timedelta, timezone
 import anthropic
 import httpx
 
-from invest_agent.backtest.engine import D1_LOOKBACK, EPOCH, H4_LOOKBACK
+from invest_agent.backtest.engine import D1_LOOKBACK, H4_LOOKBACK
 from invest_agent.config import RISK_NORMAL, Settings
 from invest_agent.data.binance import BinanceClient, BinanceError
-from invest_agent.data.candles import CandleStore, to_frame
+from invest_agent.data.candles import CandleStore, last_marks, to_frame
 from invest_agent.data.fx import usd_kzt
 from invest_agent.execution import next_window, simulate
 from invest_agent.indicators import ema
@@ -41,8 +41,9 @@ from invest_agent.universe import candidate_symbols, select_universe
 log = logging.getLogger(__name__)
 BOOKS = ("main", "research")
 INTERVALS = ("1h", "4h", "1d")
-MARK_SPAN = timedelta(days=3)
 RECENT = 5
+UNIVERSE_SPAN = timedelta(days=400)  # дневная история для выбора монет месяца
+MAX_SKIPPED = 20  # больше сбойных пар при обновлении монет — считаем, что Binance лежит
 NO_STRATEGIES = "Нет одобренных стратегий — см. отчёт бэктеста."
 _STATUS_RU = {"open": "открыта", "pending": "ждёт входа"}
 
@@ -70,6 +71,7 @@ class _Market:
     new_universe: bool
     notes: list[str]
     usd_kzt: float | None
+    skipped: set[str] = field(default_factory=set)  # без свежих свечей в этом окне
 
 
 @dataclass
@@ -91,6 +93,7 @@ def run_window(window_at: datetime, deps: Deps) -> list[str]:
         market = _prepare(window_at, deps)
         with deps.conn:
             res = _process(window_at, deps, market, tz)
+            j.mark_run_ok(window_at)  # статус в той же транзакции: повтор не задвоит окно
     except Exception as e:  # любой сбой окна -> откат и сообщение пользователю
         log.exception("window %s failed", window_at)
         if deps.conn.in_transaction:
@@ -98,7 +101,6 @@ def run_window(window_at: datetime, deps: Deps) -> list[str]:
         reason = _reason(e)
         j.finish_run(window_at, "failed", reason)
         return [failure_message(window_at, reason, tz)]
-    j.finish_run(window_at, "ok")
     _ping(deps)
     header = window_header(window_at.astimezone(tz), res.n_sent, res.notes)
     return [header, *res.body, *(budget_message(e) for e in res.budget_events), *res.tail]
@@ -136,6 +138,7 @@ def _prepare(window_at: datetime, deps: Deps) -> _Market:
     now = deps.now_fn()
     rules = binance.symbol_rules()
     notes: list[str] = []
+    critical = {"BTCUSDT"} | _active_symbols(j)  # без них окно не считается
 
     row = deps.conn.execute(
         "SELECT symbols_json FROM coins WHERE month=?", (f"{window_at:%Y-%m}",)
@@ -144,20 +147,44 @@ def _prepare(window_at: datetime, deps: Deps) -> _Market:
         universe, new_universe = json.loads(row[0]), False
     else:
         candidates = candidate_symbols(rules)
-        for s in candidates:
-            store.refresh(binance, s, "1d", now)
-        daily = {s: store.get(s, "1d", EPOCH, window_at) for s in candidates}
+        failed: list[str] = []
+        for s in sorted(candidates, key=lambda x: (x not in critical, x)):
+            try:
+                store.refresh(binance, s, "1d", now)
+            except BinanceError:
+                if s in critical:
+                    raise
+                log.warning("%s: дневные свечи не обновлены, пара пропущена", s, exc_info=True)
+                failed.append(s)
+                if len(failed) > MAX_SKIPPED:
+                    raise WindowError(f"Binance: не обновились свечи {len(failed)} пар") from None
+        since = window_at - UNIVERSE_SPAN
+        daily = {s: store.get(s, "1d", since, window_at) for s in candidates if s not in failed}
         universe, new_universe = select_universe(rules, daily, window_at), True
         notes.append(_universe_note(_previous_universe(deps.conn, window_at), universe))
+        if failed:
+            notes.append(
+                f"Монеты на месяц: пропущено пар из-за ошибок Binance: {len(failed)}"
+                f" ({', '.join(failed[:5])}{', …' if len(failed) > 5 else ''})"
+            )
 
-    for s in sorted((set(universe) | {"BTCUSDT"} | _active_symbols(j)) & rules.keys()):
-        for interval in INTERVALS:
-            store.refresh(binance, s, interval, now)
+    skipped: set[str] = set()
+    for s in sorted((set(universe) | critical) & rules.keys()):
+        try:
+            for interval in INTERVALS:
+                store.refresh(binance, s, interval, now)
+        except BinanceError:
+            if s in critical:
+                raise
+            log.warning("%s: свечи не обновлены, монета пропущена в окне", s, exc_info=True)
+            skipped.add(s)
+    if skipped:
+        notes.append(f"Без свежих свечей, пропущены в этом окне: {', '.join(sorted(skipped))}")
 
     rate = usd_kzt(now, deps.conn, deps.http)
     if rate is None and any(_needs_stage(j, b) for b in BOOKS):
         raise WindowError("нет курса ₸/$ для старта бумажного этапа")
-    return _Market(rules, universe, new_universe, notes, rate)
+    return _Market(rules, universe, new_universe, notes, rate, skipped)
 
 
 def _previous_universe(conn: sqlite3.Connection, window_at: datetime) -> list[str] | None:
@@ -215,7 +242,8 @@ def _process(window_at: datetime, deps: Deps, m: _Market, tz: timezone) -> _Resu
                 if p.symbol not in delisted:
                     delisted.add(p.symbol)
                     notes.append(
-                        f"{p.symbol}: монета пропала из списка Binance, позиция остаётся"
+                        f"{p.symbol}: нет в списке TRADING (возможно, временная остановка),"
+                        " позиция остаётся"
                         f" ({_STATUS_RU[p.status]}, стоп {sig.stop:g}) — проверьте вручную."
                     )
                 continue
@@ -223,7 +251,7 @@ def _process(window_at: datetime, deps: Deps, m: _Market, tz: timezone) -> _Resu
             j.apply_outcome(p.id, simulate(sig, candles, next_window(sig.created_at, windows)))
 
     # 4. Счёт, максимум и ступень просадки
-    marks = _marks(store, _active_symbols(j), window_at)
+    marks = last_marks(store, _active_symbols(j), window_at)
     equity: dict[str, float] = {}
     for book in BOOKS:
         b = j.book(book)
@@ -319,15 +347,6 @@ def _process(window_at: datetime, deps: Deps, m: _Market, tz: timezone) -> _Resu
     return _Result(n_sent, notes, body, budget_events, tail)
 
 
-def _marks(store: CandleStore, symbols: set[str], window_at: datetime) -> dict[str, float]:
-    marks = {}
-    for sym in symbols:
-        candles = store.get(sym, "1h", window_at - MARK_SPAN, window_at)
-        if candles:
-            marks[sym] = candles[-1].close
-    return marks
-
-
 def _candidates(
     strategies: list[Strategy], m: _Market, store: CandleStore, window_at: datetime
 ) -> list[tuple[Strategy, SignalCandidate]]:
@@ -335,6 +354,8 @@ def _candidates(
     for sym in m.universe:
         if sym not in m.rules:
             log.warning("%s: в списке монет месяца, но нет в правилах Binance — пропущена", sym)
+            continue
+        if sym in m.skipped:
             continue
         h4 = to_frame(store.get(sym, "4h", window_at - timedelta(hours=4 * H4_LOOKBACK), window_at))
         d1 = to_frame(store.get(sym, "1d", window_at - timedelta(days=D1_LOOKBACK), window_at))

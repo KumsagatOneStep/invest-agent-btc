@@ -1,6 +1,5 @@
 import argparse
 import json
-import sqlite3
 import sys
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -20,6 +19,7 @@ from invest_agent.backtest.report import build_report, load_validation, save_val
 from invest_agent.config import MIN_RR, Settings
 from invest_agent.data.binance import BinanceClient
 from invest_agent.data.candles import CandleStore
+from invest_agent.journal import connect
 from invest_agent.models import SymbolRules
 from invest_agent.strategies.base import Strategy
 from invest_agent.strategies.registry import CLASSES
@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings()  # без .env — значения по умолчанию (окна как у бота)
     db = settings.db_path
     db.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db)
+    conn = connect(db)  # busy_timeout 60 с: бот может держать запись окна
     CandleStore.ensure_schema(conn)
     store = CandleStore(conn)
     try:

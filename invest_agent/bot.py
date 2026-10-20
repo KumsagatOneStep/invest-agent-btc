@@ -17,7 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from invest_agent.backup import backup
 from invest_agent.cycle import Deps, run_window
 from invest_agent.data.binance import BinanceClient
-from invest_agent.data.candles import CandleStore
+from invest_agent.data.candles import CandleStore, last_marks
 from invest_agent.data.fx import usd_kzt
 from invest_agent.journal import Journal, connect, migrate
 from invest_agent.llm.budget import Budget
@@ -28,6 +28,7 @@ from invest_agent.stats import book_stats, btc_hold_return, costs, golive_check
 log = logging.getLogger(__name__)
 Send = Callable[[str], Awaitable[None]]
 MISFIRE_GRACE = 3600
+CATCHUP_MAX_AGE = timedelta(hours=12)
 BACKUP_AT = time(23, 0)
 SEND_ATTEMPTS = 3
 SEND_BACKOFF = (1, 3)
@@ -63,11 +64,7 @@ def _status_text(deps: Deps) -> str:
     if main.stage_started_at is None:
         return "Бумажный этап ещё не начат."
     active = j.active_positions("main")
-    marks = {}
-    for p in active:
-        cs = deps.store.get(p.symbol, "1h", now - timedelta(days=3), now)
-        if cs:
-            marks[p.symbol] = cs[-1].close
+    marks = last_marks(deps.store, {p.symbol for p in active}, now)
     equity = j.equity("main", marks)
     dd = 1 - equity / main.peak if main.peak > 0 else 0.0
     lines = [
@@ -122,7 +119,8 @@ def _coins_text(deps: Deps) -> str:
 def build_dispatcher(deps: Deps, lock: asyncio.Lock | None = None) -> Dispatcher:
     lock = lock or asyncio.Lock()
     dp = Dispatcher()
-    dp.message.filter(F.chat.id == deps.settings.telegram_chat_id)
+    owner = deps.settings.telegram_chat_id
+    dp.message.filter(F.chat.id == owner, F.from_user.id == owner)  # только сам владелец
     j = deps.journal
 
     async def status(m: Message) -> None:
@@ -199,6 +197,29 @@ async def window_job(deps: Deps, send: Send, lock: asyncio.Lock, now: datetime |
         texts = [failure_message(window_at, f"внутренняя ошибка ({type(e).__name__}: {e})")]
     for t in texts:
         await send(t)
+
+
+def catchup_window(
+    windows: list[time], now: datetime, status_of: Callable[[datetime], str | None]
+) -> datetime | None:
+    """Последнее окно не позже now, если оно не старше 12 ч и не завершилось "ok" (иначе None)."""
+    w = _window_at(windows, now)
+    if now - w > CATCHUP_MAX_AGE:
+        return None
+    return None if status_of(w) == "ok" else w
+
+
+def schedule_catchup(
+    scheduler: AsyncIOScheduler, deps: Deps, send: Send, lock: asyncio.Lock, now: datetime
+) -> datetime | None:
+    """После рестарта: одно пропущенное или упавшее окно — тем же путём с lock."""
+    w = catchup_window(deps.settings.window_times_utc(), now, deps.journal.run_status)
+    if w is not None:
+        scheduler.add_job(
+            window_job, "date", run_date=now, args=[deps, send, lock, w], id="catchup",
+            misfire_grace_time=MISFIRE_GRACE,
+        )  # fmt: skip
+    return w
 
 
 async def backup_job(deps: Deps, lock: asyncio.Lock) -> None:
@@ -280,6 +301,8 @@ async def run() -> None:
         dp = build_dispatcher(deps, lock)
         scheduler = AsyncIOScheduler(timezone=UTC)
         schedule(scheduler, deps, send, lock)
+        if missed := schedule_catchup(scheduler, deps, send, lock, datetime.now(UTC)):
+            log.info("catch-up window %s", missed.isoformat())
         scheduler.start()
         windows = " и ".join(settings.windows)
         await send(f"Агент запущен, окна {windows} (UTC+{settings.tz_offset_hours}).")

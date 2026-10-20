@@ -190,3 +190,41 @@ def test_golive_missing_btc_data_is_not_ok(j):
     c = golive_check(j, empty, T0 + timedelta(days=70))
     assert c.profit_ok and not c.beats_btc_ok and not c.all_ok
     assert c.details["btc_missing"] is True and c.details["btc_return"] is None
+
+
+def _open_main(j, symbol: str, qty: float, entry: float) -> None:
+    s = SignalCandidate(symbol, "trend", T0 + timedelta(days=60), 99.0, 100.0, 50.0, 200.0, {})
+    sid = j.add_signal(s, "v1")
+    pid = j.add_position(sid, "main", j.book("main").stage, Sizing(qty, qty * entry, 10.0))
+    j.apply_outcome(pid, Outcome("open", T0 + timedelta(days=60), entry, None, None))
+    j.conn.commit()
+
+
+def _mark(store: CandleStore, symbol: str, at: datetime, price: float) -> None:
+    h, ms = timedelta(hours=1), timedelta(milliseconds=1)
+    store.upsert(symbol, "1h", [Candle(at - h, at - ms, price, price, price, price, 1, 1)])
+
+
+def test_golive_dd_counts_underwater_open_positions(j):
+    now = T0 + timedelta(days=70)
+    _fill(j, 100, 1.0)
+    _open_main(j, "SOLUSDT", 10.0, 100.0)
+    store = _store(100.5)
+    _mark(store, "SOLUSDT", now, 70.0)  # −30 × 10 ≈ −300: счёт ~780 при пике 1000 → > 15%
+    c = golive_check(j, store, now)
+    assert book_stats(j, "main", T0, now).max_dd == 0.0  # по закрытым сделкам просадки нет
+    assert not c.dd_ok and not c.all_ok
+    assert c.details["max_dd"] > 0.15 and c.details["max_dd_closed"] == 0.0
+
+    calm = _store(100.5)
+    _mark(calm, "SOLUSDT", now, 100.0)
+    assert golive_check(j, calm, now).dd_ok
+
+
+def test_golive_dd_floor_from_book_peak(j):
+    now = T0 + timedelta(days=70)
+    _fill(j, 100, 1.0)
+    j.update_book("main", peak=1500.0)  # окно видело счёт 1500 с учётом открытых позиций
+    j.conn.commit()
+    c = golive_check(j, _store(100.5), now)
+    assert not c.dd_ok  # сейчас ~1100: просадка ~27% от максимума этапа

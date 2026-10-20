@@ -67,6 +67,7 @@ def _require_idle(conn: sqlite3.Connection, what: str) -> None:
 def connect(path: str | Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), check_same_thread=check_same_thread)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=60000")  # бот держит запись окна, пока ждёт Claude
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
@@ -119,7 +120,8 @@ _BOOK_FIELDS = {"stage", "stage_started_at", "start_equity", "peak", "dd_state",
 
 
 class Journal:
-    """Контракт окна: begin_run -> `with conn:` все записи окна -> finish_run.
+    """Контракт окна: begin_run -> `with conn:` все записи окна + mark_run_ok;
+    при сбое — откат и finish_run(status="failed").
 
     begin_run/finish_run коммитят сами и бросают RuntimeError внутри открытой транзакции.
     """
@@ -266,6 +268,19 @@ class Journal:
         )
         self.conn.commit()
         return True
+
+    def run_status(self, window_at: datetime) -> str | None:
+        row = self.conn.execute(
+            "SELECT status FROM runs WHERE window_at=?", (_iso(window_at),)
+        ).fetchone()
+        return row[0] if row else None
+
+    def mark_run_ok(self, window_at: datetime) -> None:
+        """Статус "ok" внутри транзакции окна (не коммитит): записи окна и статус — атомарно."""
+        self.conn.execute(
+            "UPDATE runs SET finished_at=?, status='ok', error=NULL WHERE window_at=?",
+            (_iso(datetime.now(UTC)), _iso(window_at)),
+        )
 
     def finish_run(self, window_at: datetime, status: str, error: str | None = None) -> None:
         _require_idle(self.conn, "finish_run")

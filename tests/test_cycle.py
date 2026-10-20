@@ -95,9 +95,16 @@ def exchange_info(symbols=SYMBOLS):
     }
 
 
-def klines_handler(window_at: datetime, fail: dict[str, int] | None = None):
-    """Синтетические свечи: цена ~100, ряд от window_at − SPAN до запрошенного endTime."""
+def klines_handler(window_at: datetime, fail: dict[str, int] | None = None, trend: bool = False):
+    """Синтетические свечи: цена ~100, ряд от window_at − SPAN до запрошенного endTime.
+
+    trend=True: цена равномерно растёт (+0.5 в сутки) — каждая 4h свеча пробивает канал.
+    """
     fail = fail or {}
+    base = int((window_at - timedelta(days=400)).timestamp() * 1000)
+
+    def price(ms: int) -> str:
+        return f"{100 + (ms - base) / 86_400_000 * 0.5:.6f}"
 
     def handler(request: httpx.Request) -> httpx.Response:
         p = request.url.params
@@ -114,7 +121,11 @@ def klines_handler(window_at: datetime, fail: dict[str, int] | None = None):
             # дневные закрытия колеблются ±10%, иначе монета похожа на стейблкоин
             close = ("90" if (t // step) % 2 else "110") if interval == "1d" else "100"
             high, low = ("111", "89") if interval == "1d" else ("101", "99.5")
-            rows.append([t, "100", high, low, close, "10", t + step - 1, "1000", 1, "0", "0", "0"])
+            open_ = "100"
+            if trend:
+                open_, close = price(t), price(t + step)
+                high, low = close, open_
+            rows.append([t, open_, high, low, close, "10", t + step - 1, "1000", 1, "0", "0", "0"])
             t += step
         return httpx.Response(200, json=rows)
 
@@ -145,11 +156,11 @@ def env(monkeypatch):
     return SimpleNamespace(conn=conn, journal=journal, make=make, state=state)
 
 
-def mock_network(window_at=MORNING, fail=None, symbols=SYMBOLS):
+def mock_network(window_at=MORNING, fail=None, symbols=SYMBOLS, trend=False):
     respx.get(f"{BASE}/api/v3/exchangeInfo").mock(
         return_value=httpx.Response(200, json=exchange_info(symbols))
     )
-    klines = respx.get(f"{BASE}/api/v3/klines").mock(side_effect=klines_handler(window_at, fail))
+    klines = respx.get(f"{BASE}/api/v3/klines").mock(side_effect=klines_handler(window_at, fail, trend))
     respx.get(FX_URL).mock(return_value=httpx.Response(200, json={"rates": {"KZT": 500.0}}))
     ping = respx.get(PING).mock(return_value=httpx.Response(200))
     return SimpleNamespace(klines=klines, ping=ping)
@@ -264,7 +275,7 @@ def test_window_is_idempotent(env):
 @respx.mock
 @pytest.mark.parametrize("status", [429, 451, 503])
 def test_window_binance_down_reports_failure_and_writes_nothing(env, status):
-    mock_network(fail={"SOLUSDT": status})  # BTC/ETH уже скачаны — сбой посреди окна
+    mock_network(fail={"BTCUSDT": status})  # без BTC окно не считается
     claude = FakeClaude(APPROVE)
     msgs = run_window(MORNING, env.make(claude=claude))
 
@@ -348,7 +359,7 @@ def test_delisted_symbol_with_open_position_warns(env):
 
     status = env.conn.execute("SELECT status FROM positions WHERE id=?", (pid,)).fetchone()[0]
     assert status == "open"
-    assert "OLDUSDT" in msgs[0] and "пропала" in msgs[0]
+    assert "OLDUSDT: нет в списке TRADING (возможно, временная остановка)" in msgs[0]
     assert not any(c.request.url.params["symbol"] == "OLDUSDT" for c in net.klines.calls)
     assert run_status(env.conn)[0] == "ok"
 
@@ -428,3 +439,101 @@ def test_unexpected_error_rolls_back_window(env, monkeypatch):
         assert count(env.conn, table) == 0, table
     assert env.journal.book("main").stage == 0
     assert run_status(env.conn)[0] == "failed"
+
+
+@respx.mock
+def test_monthly_refresh_skips_failing_pair(env):
+    mock_network(fail={"SOLUSDT": 400})
+    msgs = run_window(MORNING, env.make())
+
+    assert run_status(env.conn) == ("ok", None)
+    assert "Монеты на месяц: пропущено пар из-за ошибок Binance: 1 (SOLUSDT)" in msgs[0]
+    month = json.loads(env.conn.execute("SELECT symbols_json FROM coins").fetchone()[0])
+    assert set(month) == {"BTCUSDT", "ETHUSDT"}
+    assert count(env.conn, "signals") == 0
+
+
+@respx.mock
+def test_too_many_failing_pairs_fail_window(env, monkeypatch):
+    monkeypatch.setattr(cycle, "MAX_SKIPPED", 0)
+    mock_network(fail={"SOLUSDT": 400})
+    msgs = run_window(MORNING, env.make())
+    assert "Сигналы не посчитаны" in msgs[0] and run_status(env.conn)[0] == "failed"
+
+
+@respx.mock
+def test_failing_symbol_with_active_position_fails_window(env):
+    mock_network(fail={"SOLUSDT": 400})
+    seed_stage(env.journal)
+    seed_position(env.journal, "SOLUSDT", "research", None)
+    msgs = run_window(MORNING, env.make())
+    assert "Сигналы не посчитаны" in msgs[0] and "HTTP 400" in msgs[0]
+    assert run_status(env.conn)[0] == "failed"
+
+
+@respx.mock
+def test_universe_member_without_fresh_candles_skipped_this_window(env):
+    env.conn.execute(
+        "INSERT INTO coins VALUES ('2026-10', ?)", (json.dumps(["BTCUSDT", "SOLUSDT"]),)
+    )
+    env.conn.commit()
+    mock_network(fail={"SOLUSDT": 503})
+    msgs = run_window(MORNING, env.make())
+
+    assert run_status(env.conn) == ("ok", None)
+    assert "SOLUSDT" in msgs[0] and "пропущены в этом окне" in msgs[0]
+    assert count(env.conn, "signals") == 0  # без свежих свечей стратегия не смотрит монету
+
+
+@respx.mock
+def test_monthly_refresh_reads_only_recent_daily_history(env):
+    mock_network()
+    deps = env.make()
+    starts = []
+    orig = deps.store.get
+
+    def spy(symbol, interval, start, end):
+        if interval == "1d":
+            starts.append(start)
+        return orig(symbol, interval, start, end)
+
+    deps.store.get = spy
+    run_window(MORNING, deps)
+    assert starts and min(starts) >= MORNING - timedelta(days=400)
+
+
+@respx.mock
+def test_ok_status_committed_with_window_writes(env):
+    mock_network()
+
+    def crash(*a, **kw):  # процесс упал бы между коммитом окна и отдельной записью статуса
+        raise SystemExit("killed")
+
+    env.journal.finish_run = crash
+    run_window(MORNING, env.make())
+    assert run_status(env.conn)[0] == "ok"
+    del env.journal.finish_run
+    assert run_window(MORNING, env.make()) == []  # повтор не задвоит сигналы
+    assert count(env.conn, "signals") == 1
+
+
+@respx.mock
+def test_real_trend_strategy_through_window(env):
+    from invest_agent.strategies.trend import TrendBreakout
+
+    mock_network(trend=True)
+    strategy = TrendBreakout()
+    env.state["strategies"] = [strategy]
+    claude = FakeClaude(APPROVE)
+    msgs = run_window(MORNING, env.make(claude=claude))
+
+    assert run_status(env.conn) == ("ok", None)
+    rows = env.conn.execute(
+        "SELECT symbol, strategy, strategy_version, entry_high, claude_status FROM signals"
+    ).fetchall()
+    assert {r[0] for r in rows} == set(SYMBOLS)
+    assert all(r[1:3] == ("trend", strategy.version()) and r[4] == "approved" for r in rows)
+    # вход по закрытию последней закрытой 4h свечи (00:00 UTC), не по незакрытой
+    last_closed = 100 + (timedelta(days=400) - timedelta(hours=3)).total_seconds() / 86400 * 0.5
+    assert all(abs(r[3] - last_closed) < 0.011 for r in rows)
+    assert sum("покупка (спот)" in m for m in msgs) == 3

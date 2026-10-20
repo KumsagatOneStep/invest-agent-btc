@@ -1,6 +1,6 @@
 import asyncio
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -56,11 +56,11 @@ def env():
     dp = build_dispatcher(deps)
     n = [0]
 
-    async def say(text: str, chat: int = CHAT):
+    async def say(text: str, chat: int = CHAT, user: int | None = None):
         n[0] += 1
         msg = Message(
-            message_id=n[0], date=NOW, chat=Chat(id=chat, type="private"),
-            from_user=User(id=chat, is_bot=False, first_name="x"), text=text,
+            message_id=n[0], date=NOW, chat=Chat(id=chat, type="private" if user is None else "group"),
+            from_user=User(id=chat if user is None else user, is_bot=False, first_name="x"), text=text,
             entities=[{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}],
         )  # fmt: skip
         await dp.feed_update(bot, Update(update_id=n[0], message=msg))
@@ -82,6 +82,13 @@ async def test_foreign_chat_ignored(env):
     assert env.journal.book("main").paused is False
     await env.say("/pause")
     assert env.journal.book("main").paused is True
+
+
+async def test_other_user_in_same_chat_ignored(env):
+    start_books(env.journal, env.conn)
+    sent = await env.say("/pause", chat=CHAT, user=999)  # группа с id владельца, пишет не он
+    assert sent == []
+    assert env.journal.book("main").paused is False
 
 
 async def test_resume_from_pause_keeps_stage(env):
@@ -235,3 +242,52 @@ def test_init_books_skips_started_and_needs_rate(env):
     env.deps.http = SimpleNamespace(get=_down)
     assert "курса" in botmod._init_books(env.deps)
     assert env.journal.book("main").stage == 0
+
+
+W = [time(3, 0), time(15, 0)]
+
+
+def test_catchup_runs_missed_or_failed_recent_window():
+    at = datetime(2026, 10, 20, 3, 0, tzinfo=UTC)
+    now = at + timedelta(minutes=7)  # рестарт после 03:00, окно пропущено
+    assert botmod.catchup_window(W, now, lambda w: None) == at
+    assert botmod.catchup_window(W, now, lambda w: "failed") == at
+    assert botmod.catchup_window(W, now, lambda w: "ok") is None
+    asked = []
+    botmod.catchup_window(W, now, lambda w: asked.append(w))
+    assert asked == [at]  # только одно, последнее окно
+
+
+def test_catchup_ignores_windows_older_than_12h():
+    only_morning = [time(3, 0)]
+    now = datetime(2026, 10, 20, 16, 0, tzinfo=UTC)  # 13 ч после окна
+    assert botmod.catchup_window(only_morning, now, lambda w: None) is None
+    now = datetime(2026, 10, 20, 15, 0, tzinfo=UTC)  # ровно 12 ч
+    assert botmod.catchup_window(only_morning, now, lambda w: None) == datetime(
+        2026, 10, 20, 3, 0, tzinfo=UTC
+    )
+
+
+def test_run_status_reads_runs_table(env):
+    at = datetime(2026, 10, 20, 3, 0, tzinfo=UTC)
+    assert env.journal.run_status(at) is None
+    env.journal.begin_run(at)
+    env.journal.finish_run(at, "failed", "x")
+    assert env.journal.run_status(at) == "failed"
+
+
+def test_schedule_catchup_adds_one_job(env):
+    sched = AsyncIOScheduler(timezone=UTC)
+
+    async def send(text): ...
+
+    at = datetime(2026, 10, 20, 3, 0, tzinfo=UTC)
+    lock = asyncio.Lock()
+    assert botmod.schedule_catchup(sched, env.deps, send, lock, at + timedelta(minutes=5)) == at
+    job = sched.get_job("catchup")
+    assert job is not None and job.args[-1] == at
+    with env.conn:
+        env.conn.execute("INSERT INTO runs VALUES (?, ?, ?, 'ok', NULL)", (at.isoformat(),) * 3)
+    sched2 = AsyncIOScheduler(timezone=UTC)
+    assert botmod.schedule_catchup(sched2, env.deps, send, lock, at + timedelta(minutes=5)) is None
+    assert sched2.get_job("catchup") is None

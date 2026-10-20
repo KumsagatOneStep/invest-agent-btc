@@ -27,7 +27,7 @@ cp .env.example .env   # и заполните значения (см. ниже)
 | Переменная | Что это |
 |---|---|
 | `TELEGRAM_TOKEN` | токен бота от @BotFather |
-| `TELEGRAM_CHAT_ID` | ваш chat id; бот отвечает и пишет только в этот чат |
+| `TELEGRAM_CHAT_ID` | ваш Telegram ID (id личного чата с ботом); бот пишет только сюда и принимает команды только от вас |
 | `ANTHROPIC_API_KEY` | ключ Claude API |
 
 Необязательные (значения по умолчанию в `.env.example`, закомментированы):
@@ -110,6 +110,19 @@ docker compose up -d --build   # затем запуск/перезапуск б
 `restart: unless-stopped` поднимает бота после перезагрузки сервера; логи
 ротируются (10 МБ x 3 файла). Обновление: `git pull && docker compose up -d --build`.
 
+После запуска бот проверяет последнее окно по расписанию: если оно было не
+больше 12 часов назад и не завершилось успешно (рестарт пришёлся на время окна
+или Binance был недоступен), окно считается сразу. Повторный запуск того же
+окна ничего не задваивает.
+
+**Мониторинг (рекомендуется).** Чтобы узнать, что бот молчит (контейнер упал,
+сервер выключен), заведите бесплатную проверку на [healthchecks.io](https://healthchecks.io)
+(или аналог): New Check → Period 12 hours, Grace 1 hour → скопируйте ping-URL
+и впишите его в `.env` как `HEALTHCHECK_URL=https://hc-ping.com/…`, затем
+`docker compose up -d`. Бот пингует URL после каждого успешного окна; если
+пинга нет 13 часов, healthchecks.io пришлёт письмо или сообщение в Telegram
+(настройте канал уведомлений в его интерфейсе).
+
 ## Команды бота
 
 | Команда | Что делает |
@@ -129,8 +142,15 @@ docker compose up -d --build   # затем запуск/перезапуск б
 - Журнал сделок, портфели и свечи: SQLite `data/journal.sqlite` (путь задаётся
   `DB_PATH`), на хосте это `./data/journal.sqlite`.
 - Ежедневные бэкапы: `data/backups/journal-YYYYMMDD.sqlite`, хранятся 14 последних.
-  Восстановление: остановите бота и положите нужный файл на место
-  `data/journal.sqlite`.
+  Они лежат на том же диске, что и журнал: регулярно копируйте их с сервера
+  (например, `rsync -a vps:invest-agent/data/backups/ ./backups/`).
+- Восстановление из бэкапа:
+  1. `docker compose stop agent`;
+  2. удалите `data/journal.sqlite-wal` и `data/journal.sqlite-shm`, если они есть
+     (иначе SQLite применит к восстановленному файлу старый журнал WAL);
+  3. скопируйте бэкап на место: `cp data/backups/journal-YYYYMMDD.sqlite data/journal.sqlite`
+     (на VPS затем `sudo chown 10001 data/journal.sqlite`);
+  4. `docker compose start agent`.
 - Логи бота: `docker compose logs agent`.
 - Каталог `data/` не в git; копируйте его на другую машину, чтобы не потерять
   историю.

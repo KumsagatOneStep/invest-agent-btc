@@ -202,3 +202,18 @@ def test_main_passes_settings_windows(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "validate", lambda *a: got.setdefault("windows", a[-1]))
     assert cli.main(["validate", "--strategy", "trend"]) == 0
     assert got["windows"] == [time(4, 30)]
+
+
+def test_cli_opens_db_with_busy_timeout(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    opened = []
+    real = cli.connect
+
+    def spy(path, **kw):
+        conn = real(path, **kw)
+        opened.append(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+        return conn
+
+    monkeypatch.setattr(cli, "connect", spy)
+    cli.main(["report"])
+    assert opened == [60_000]

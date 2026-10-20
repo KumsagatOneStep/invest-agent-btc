@@ -8,6 +8,7 @@ from invest_agent.models import Candle
 
 HISTORY = timedelta(days=4 * 365 + 7)  # запас, чтобы первый якорь train видел ≥ 365 дней
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+MARK_SPAN = timedelta(days=3)
 
 
 def _ms(dt: datetime) -> int:
@@ -30,6 +31,16 @@ def to_frame(candles: list[Candle]) -> pd.DataFrame:
         }
     )
     return df.set_index("close_time")
+
+
+def last_marks(store: "CandleStore", symbols: set[str], at: datetime) -> dict[str, float]:
+    """Отметки: последнее закрытие 1h с close_time <= at (не старше MARK_SPAN)."""
+    marks = {}
+    for sym in symbols:
+        candles = store.get(sym, "1h", at - MARK_SPAN, at)
+        if candles:
+            marks[sym] = candles[-1].close
+    return marks
 
 
 class CandleStore:

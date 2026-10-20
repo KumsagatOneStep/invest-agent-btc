@@ -9,6 +9,7 @@ from invest_agent.models import Candle, SymbolRules
 
 PAGE_LIMIT = 1000
 RETRY_PAUSES = (1, 2, 4)
+MAX_RETRY_AFTER = 60.0
 
 
 class BinanceError(Exception):
@@ -23,6 +24,15 @@ def _from_ms(ms: int) -> datetime:
     return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=ms)
 
 
+def _pause(resp: httpx.Response, default: float) -> float:
+    """Пауза перед повтором: Retry-After (секунды, не больше минуты), иначе default."""
+    try:
+        after = float(resp.headers.get("Retry-After", ""))
+    except ValueError:
+        return default
+    return min(after, MAX_RETRY_AFTER) if after > default else default
+
+
 class BinanceClient:
     def __init__(
         self,
@@ -35,9 +45,16 @@ class BinanceClient:
         self.sleep = sleep
 
     def _get(self, path: str, params: dict | None = None):
-        for attempt in range(len(RETRY_PAUSES) + 1):
+        """GET с повтором: сетевые ошибки, 5xx и 429 (с учётом Retry-After); 451 и прочие 4xx — сразу."""
+        last = len(RETRY_PAUSES)
+        for attempt in range(last + 1):
             try:
                 resp = self.http.get(self.base_url + path, params=params)
+            except httpx.TransportError as e:
+                if attempt == last:
+                    raise BinanceError(f"network error on {path}: {e}") from e
+                self.sleep(RETRY_PAUSES[attempt])
+                continue
             except httpx.HTTPError as e:
                 raise BinanceError(f"network error on {path}: {e}") from e
             if resp.status_code == 200:
@@ -46,9 +63,9 @@ class BinanceClient:
                 except ValueError as e:
                     raise BinanceError(f"{path}: invalid JSON body") from e
             retryable = resp.status_code == 429 or resp.status_code >= 500
-            if not retryable or attempt == len(RETRY_PAUSES):
+            if not retryable or attempt == last:
                 raise BinanceError(f"{path}: HTTP {resp.status_code}")
-            self.sleep(RETRY_PAUSES[attempt])
+            self.sleep(_pause(resp, RETRY_PAUSES[attempt]))
         raise AssertionError("unreachable")
 
     def klines(
