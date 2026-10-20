@@ -99,7 +99,7 @@ def test_btc_hold_return():
         Candle(T0 + h, T0 + 2 * h - timedelta(milliseconds=1), 110, 125, 100, 120, 1, 1),
     ])  # fmt: skip
     assert btc_hold_return(store, T0, T0 + 2 * h) == pytest.approx(0.2)
-    assert btc_hold_return(store, T0 + 5 * h, T0 + 6 * h) == 0.0
+    assert btc_hold_return(store, T0 + 5 * h, T0 + 6 * h) is None
 
 
 def _store(btc_end: float) -> CandleStore:
@@ -181,3 +181,12 @@ def test_halt_analysis_groups_losses(j):
     )
     assert a["open"] == [{"symbol": "XRPUSDT", "stop": 90.0, "status": "pending"}]
     assert pend
+
+
+def test_golive_missing_btc_data_is_not_ok(j):
+    _fill(j, 100, 1.0)
+    empty = CandleStore(sqlite3.connect(":memory:"))
+    CandleStore.ensure_schema(empty.conn)
+    c = golive_check(j, empty, T0 + timedelta(days=70))
+    assert c.profit_ok and not c.beats_btc_ok and not c.all_ok
+    assert c.details["btc_missing"] is True and c.details["btc_return"] is None

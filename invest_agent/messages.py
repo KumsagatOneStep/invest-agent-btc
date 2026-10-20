@@ -57,6 +57,35 @@ def _when(dt: datetime) -> str:
     return f"{dt:%d.%m %H:%M} ({_utc_label(dt)})"
 
 
+def _cut(text: str, room: int) -> str:
+    """Режет уже экранированный текст до room символов с «…», не разрывая сущность или тег."""
+    if len(text) <= room:
+        return text
+    part = text[: max(room - 1, 0)]
+    for opener, closer in (("&", ";"), ("<", ">")):
+        i = part.rfind(opener)
+        if i != -1 and closer not in part[i:]:
+            part = part[:i]
+    return part + "…"
+
+
+def _capped(lines: list[str]) -> str:
+    """Склеивает строки (уже экранированные); хвост, не влезший в 4096, урезается или отбрасывается."""
+    out: list[str] = []
+    used = 0
+    for line in lines:
+        sep = 1 if out else 0
+        if used + sep + len(line) <= LIMIT:
+            out.append(line)
+            used += sep + len(line)
+            continue
+        room = LIMIT - used - sep
+        if room > 1:
+            out.append(_cut(line, room))
+        break
+    return "\n".join(out)
+
+
 def _yn(ok: bool) -> str:
     return "да" if ok else "нет"
 
@@ -107,9 +136,8 @@ def signal_message(
 
 
 def window_header(now: datetime, n_signals: int, notes: list[str]) -> str:
-    title = f"<b>Окно {_when(now)}</b>\n"
     body = "Сигналов нет." if n_signals == 0 else f"Сигналов: {n_signals}."
-    return title + body + "".join(f"\n{_e(n)}" for n in notes)
+    return _capped([f"<b>Окно {_when(now)}</b>", body, *(_e(n) for n in notes)])
 
 
 def evening_summary(
@@ -132,7 +160,7 @@ def evening_summary(
         lines.append(f"{_e(p.symbol)}: {state}; стоп {_p(p.stop)}, цель {_p(p.target)}")
     lines.append(f"Счёт: {_usd_kzt(equity, usd_kzt)}, режим {_e(dd_state)}")
     lines += [_e(n) for n in notes]
-    return "\n".join(lines)
+    return _capped(lines)
 
 
 def _book_block(title: str, s: BookStats, usd_kzt: float | None) -> str:
@@ -174,7 +202,7 @@ def weekly_message(
         + ("Критерии выполнены." if criteria.all_ok else "Критерии не выполнены.")
         + (f" (сделок {d['closed']}, дней {d['days']:.0f})" if "closed" in d else "")
     )
-    return "\n".join(lines)
+    return _capped(lines)
 
 
 def halt_message(analysis: dict) -> str:
@@ -197,7 +225,7 @@ def halt_message(analysis: dict) -> str:
     if analysis.get("open"):
         lines.append("Открытые позиции не закрыты, стопы:")
         lines += [f"{_e(o['symbol'])}: стоп {_p(o['stop'])}" for o in analysis["open"]]
-    return "\n".join(lines)
+    return _capped(lines)
 
 
 def reduced_message() -> str:
@@ -212,10 +240,13 @@ def recovered_message() -> str:
 
 
 def failure_message(window_at: datetime, reason: str, tz: tzinfo | None = None) -> str:
-    return (
-        f"<b>Окно {_when(_local(window_at, tz))}</b>\nСигналы не посчитаны, причина: {_e(reason)}"
+    return _capped(
+        [
+            f"<b>Окно {_when(_local(window_at, tz))}</b>",
+            f"Сигналы не посчитаны, причина: {_e(reason)}",
+        ]
     )
 
 
 def budget_message(event: str) -> str:
-    return _e(_BUDGET.get(event, f"Событие бюджета: {event}"))
+    return _capped([_e(_BUDGET.get(event, f"Событие бюджета: {event}"))])

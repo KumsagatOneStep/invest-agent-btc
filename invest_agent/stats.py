@@ -115,8 +115,10 @@ def costs(journal: Journal, settings: Settings, since: datetime, until: datetime
     return server + api
 
 
-def btc_hold_return(store: CandleStore, since: datetime, until: datetime) -> float:
-    """Доходность «купить и держать BTC» за период, доля (0.1 = 10%); 0 без свечей."""
+def btc_hold_return(store: CandleStore, since: datetime, until: datetime) -> float | None:
+    """Доходность «купить и держать BTC» за период, доля (0.1 = 10%); None без свечей."""
+    if not store.get("BTCUSDT", "1h", since, until):
+        return None
     return btc_hold_pct(store, Period(since, until)) / 100
 
 
@@ -134,13 +136,13 @@ def golive_check(journal: Journal, store: CandleStore, now: datetime) -> Criteri
     days = (now - b.stage_started_at).total_seconds() / 86400
     ret = s.net_usdt / b.start_equity
     btc = btc_hold_return(store, b.stage_started_at, now)
-    details = {"days": days, "closed": n_closed, "net_usdt": s.net_usdt, "return": ret,
+    details = {"btc_missing": btc is None, "days": days, "closed": n_closed, "net_usdt": s.net_usdt, "return": ret,
                "btc_return": btc, "max_dd": s.max_dd}  # fmt: skip
     return Criteria(
         days_ok=days >= GOLIVE_DAYS,
         trades_ok=n_closed >= GOLIVE_TRADES,
         profit_ok=s.net_usdt > 0,
-        beats_btc_ok=ret > btc,
+        beats_btc_ok=btc is not None and ret > btc,
         dd_ok=s.max_dd <= GOLIVE_MAX_DD,
         details=details,
     )

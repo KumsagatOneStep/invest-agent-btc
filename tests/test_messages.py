@@ -94,3 +94,33 @@ def test_weekly_message():
     c = Criteria(True, False, True, False, True, {})
     m = weekly_message(s, s, c, 3.0, btc_return=0.02, usd_kzt=500.0)
     assert "27" in m and "не выполнены" in m
+
+
+def _valid_html(m: str) -> bool:
+    import re
+
+    if re.search(r"&(?!(amp|lt|gt|quot|#x27);)", m):
+        return False
+    return m.count("<b>") == m.count("</b>") and "<" not in m.replace("<b>", "").replace("</b>", "")
+
+
+def test_all_builders_capped_and_valid():
+    big = "<&>" * 4000
+    msgs = [
+        failure_message(T0, big),
+        window_header(T0.astimezone(TZ), 1, [big, "x"]),
+        evening_summary(T0.astimezone(TZ), [], 1.0, big, None, [big]),
+        halt_message(
+            {
+                "by_strategy": {big: -1.0},
+                "by_symbol": {big: -1.0},
+                "worst": [{"symbol": big, "strategy": big, "pnl_usdt": -1.0}] * 5,
+                "open": [{"symbol": big, "stop": 1.0}],
+            }
+        ),
+        budget_message(big),
+    ]
+    for m in msgs:
+        assert len(m) <= 4096 and _valid_html(m), m[-60:]
+    assert failure_message(T0, big).endswith("…")
+    assert "Сигналы не посчитаны, причина:" in failure_message(T0, big)
