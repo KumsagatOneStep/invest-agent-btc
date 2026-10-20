@@ -47,6 +47,12 @@ def net_pnl(outcome: Outcome, qty: float) -> tuple[float, float]:
     return qty * (outcome.exit_price - outcome.entry_price) - fees, fees
 
 
+def unrealized_pnl(qty: float, entry_price: float, mark: float) -> float:
+    """Нереализованный pnl по отметке: как если бы закрыли сейчас (проскальзывание + комиссии)."""
+    exit_price = mark * (1 - SLIPPAGE)
+    return qty * (exit_price - entry_price) - FEE * qty * (entry_price + exit_price)
+
+
 def next_window(after: datetime, windows_utc: list[time]) -> datetime:
     """Первое окно строго позже `after` (UTC), может перейти на следующий день."""
     for day in (0, 1):

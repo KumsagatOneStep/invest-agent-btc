@@ -6,7 +6,7 @@ import pandas as pd
 from invest_agent.data.binance import BinanceClient
 from invest_agent.models import Candle
 
-HISTORY = timedelta(days=4 * 365)
+HISTORY = timedelta(days=4 * 365 + 7)  # запас, чтобы первый якорь train видел ≥ 365 дней
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 

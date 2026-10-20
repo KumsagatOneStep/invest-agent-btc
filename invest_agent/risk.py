@@ -49,6 +49,9 @@ def size_position(
     unit_risk = sig.entry_high - sig.stop
     if unit_risk <= 0:
         return Rejection("stop>=entry")
+    if sig.stop <= 0 or sig.entry_low > sig.entry_high or sig.entry_low <= sig.stop:
+        # округление до шага цены может вывернуть зону (0,25×ATR меньше шага)
+        return Rejection("entry zone invalid after rounding")
     if (sig.target - sig.entry_high) < MIN_RR * unit_risk * (1 - 1e-12):
         return Rejection("rr<1.5")
     if any(o.symbol == sig.symbol for o in open_):

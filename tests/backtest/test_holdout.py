@@ -78,3 +78,23 @@ def test_real_holdout_summary_feeds_report(tmp_path, monkeypatch):
     run(monkeypatch, log, 1.0)
     text = build_report({}, log.entries())
     assert "holdout" in text and "BTC buy&hold" in text
+
+
+def test_holdout_logs_code_hash_and_passes_windows(tmp_path, monkeypatch):
+    from datetime import time
+
+    from invest_agent.strategies.base import code_hash
+
+    seen = {}
+
+    def fake(*a, **k):
+        seen.update(k)
+        return canned(1.0)
+
+    monkeypatch.setattr(holdout, "run_backtest", fake)
+    log = HoldoutLog(tmp_path / "h.json")
+    windows = [time(4, 0)]
+    run_holdout(TrendBreakout(), make_store(), {}, Period(START, END), 100.0, log, windows)
+    assert seen["windows_utc"] == windows
+    entry = log.entries()[TrendBreakout().version()]
+    assert entry["summary"]["code_hash"] == code_hash()

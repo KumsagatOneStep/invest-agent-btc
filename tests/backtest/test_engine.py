@@ -1,4 +1,5 @@
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -40,6 +41,12 @@ def flat(
     return out
 
 
+def daily(start: datetime, end: datetime) -> list[Candle]:
+    """Дневные свечи с закрытиями 90/110 (не похожи на стейблкоин)."""
+    out = flat(start, end, D1)
+    return [replace(c, close=90.0 if i % 2 else 110.0) for i, c in enumerate(out)]
+
+
 def rules_for(*symbols: str) -> dict[str, SymbolRules]:
     return {s: SymbolRules(s, 0.01, 0.001, 5.0) for s in symbols}
 
@@ -67,7 +74,7 @@ def test_engine_uses_same_execution_and_limits():
     symbols = ["BTCUSDT", "ETHUSDT", "AAAUSDT", "BBBUSDT", "CCCUSDT"]
     store = make_store()
     for s in symbols:
-        store.upsert(s, "1d", flat(start - timedelta(days=400), end, D1))
+        store.upsert(s, "1d", daily(start - timedelta(days=400), end))
         store.upsert(s, "1h", flat(start, end, H1))
     result = run_backtest([Fixed()], store, rules_for(*symbols), start, end, 10_000.0)
 
@@ -85,9 +92,9 @@ def test_engine_no_lookahead_universe():
     start, end = dt(2026, 1, 10), dt(2026, 3, 20)
     store = make_store()
     for s in ("BTCUSDT", "ETHUSDT", "OLDUSDT"):
-        store.upsert(s, "1d", flat(dt(2024, 6, 1), end, D1))
+        store.upsert(s, "1d", daily(dt(2024, 6, 1), end))
     # NEW получает 365 дней истории только к 1 марта 2026
-    store.upsert("NEWUSDT", "1d", flat(dt(2025, 2, 20), end, D1))
+    store.upsert("NEWUSDT", "1d", daily(dt(2025, 2, 20), end))
     store.upsert("NEWUSDT", "1h", flat(start, end, H1))
     rules = rules_for("BTCUSDT", "ETHUSDT", "OLDUSDT", "NEWUSDT")
 
@@ -102,7 +109,7 @@ def test_engine_stops_opening_after_halt():
     symbols = ["BTCUSDT", "ETHUSDT", "AAAUSDT", "BBBUSDT"]
     store = make_store()
     for s in symbols:
-        store.upsert(s, "1d", flat(start - timedelta(days=400), end, D1))
+        store.upsert(s, "1d", daily(start - timedelta(days=400), end))
         # каждая свеча касается цены входа и стопа -> каждая сделка закрывается по стопу
         store.upsert(s, "1h", flat(start, end, H1, low=97.0))
     result = run_backtest([Fixed()], store, rules_for(*symbols), start, end, 10_000.0)
@@ -140,8 +147,28 @@ def test_engine_warns_once_for_universe_member_without_candles(caplog):
     start, end = dt(2026, 3, 1), dt(2026, 3, 3)
     store = make_store()
     for s in ("BTCUSDT", "ETHUSDT"):
-        store.upsert(s, "1d", flat(start - timedelta(days=400), end, D1))
+        store.upsert(s, "1d", daily(start - timedelta(days=400), end))
     with caplog.at_level("WARNING"):
         run_backtest([Fixed(set())], store, rules_for("BTCUSDT", "ETHUSDT"), start, end, 1000.0)
     msgs = [r.getMessage() for r in caplog.records if "нет свечей" in r.getMessage()]
     assert sorted(m.split(":")[0] for m in msgs) == ["BTCUSDT", "ETHUSDT"]
+
+
+def test_engine_marks_open_positions_with_shared_helper(monkeypatch):
+    from invest_agent.backtest import engine
+
+    calls = []
+
+    def spy(qty, entry_price, mark):
+        calls.append((qty, entry_price, mark))
+        return 7.0
+
+    monkeypatch.setattr(engine, "unrealized_pnl", spy)
+    start, end = dt(2026, 3, 1), dt(2026, 3, 3)
+    store = make_store()
+    for s in ("BTCUSDT", "ETHUSDT"):
+        store.upsert(s, "1d", daily(start - timedelta(days=400), end))
+        store.upsert(s, "1h", flat(start, end, H1))
+    result = run_backtest([Fixed({"BTCUSDT"})], store, rules_for("BTCUSDT", "ETHUSDT"), start, end, 1000.0)
+    assert calls and calls[0][1:] == (100 * (1 + SLIPPAGE), 100.0)
+    assert 1007.0 in result.equity.tolist()

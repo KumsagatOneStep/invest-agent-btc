@@ -6,7 +6,7 @@ from pathlib import Path
 
 from invest_agent.data.candles import CandleStore
 from invest_agent.data.fx import ensure_schema as ensure_fx_schema
-from invest_agent.execution import net_pnl
+from invest_agent.execution import net_pnl, unrealized_pnl
 from invest_agent.llm.budget import ensure_schema as ensure_budget_schema
 from invest_agent.models import Outcome, Rejection, SignalCandidate, Sizing
 from invest_agent.risk import DDState, OpenRisk
@@ -237,7 +237,8 @@ class Journal:
         )
 
     def equity(self, book: str, marks: dict[str, float]) -> float:
-        """start_equity + закрытый pnl этапа + нереализованный pnl открытых по `marks`.
+        """start_equity + закрытый pnl этапа + нереализованный pnl открытых по `marks`
+        (с проскальзыванием и комиссиями выхода, как в бэктесте).
 
         Открытая позиция без отметки и ожидающая вход дают 0.
         """
@@ -250,7 +251,7 @@ class Journal:
         unrealized = 0.0
         for p in self.active_positions(book):
             if p.stage == b.stage and p.status == "open" and p.symbol in marks and p.entry_price:
-                unrealized += p.qty * (marks[p.symbol] - p.entry_price)
+                unrealized += unrealized_pnl(p.qty, p.entry_price, marks[p.symbol])
         return b.start_equity + realized + unrealized
 
     def begin_run(self, window_at: datetime) -> bool:

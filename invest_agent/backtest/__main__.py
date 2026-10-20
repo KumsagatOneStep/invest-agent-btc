@@ -2,10 +2,12 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 from invest_agent.backtest.engine import (
+    D1_LOOKBACK,
+    H4_LOOKBACK,
     Period,
     btc_hold_pct,
     run_backtest,
@@ -15,7 +17,7 @@ from invest_agent.backtest.engine import (
 )
 from invest_agent.backtest.holdout import HoldoutAlreadyRun, HoldoutLog, run_holdout
 from invest_agent.backtest.report import build_report, load_validation, save_validation
-from invest_agent.config import Settings
+from invest_agent.config import MIN_RR, Settings
 from invest_agent.data.binance import BinanceClient
 from invest_agent.data.candles import CandleStore
 from invest_agent.models import SymbolRules
@@ -30,6 +32,8 @@ RULES_FILE = "symbol_rules.json"
 VALIDATION_FILE = "validation_log.json"
 REPORT_FILE = "backtest_report.md"
 BENCH = "BTCUSDT"
+# Окна индикаторов не длиннее истории, которую видит стратегия (иначе сигнала не будет никогда)
+LOOKBACK_LIMITS = {"donchian_n": H4_LOOKBACK, "rsi_n": H4_LOOKBACK, "trend_ema": D1_LOOKBACK}
 
 
 class CliError(Exception):
@@ -53,7 +57,19 @@ def make_strategy(name: str, raw_params: list[str]) -> Strategy:
             params[key] = int(number)
         else:
             params[key] = number
+        _check_param(key, params[key])
     return cls(params)
+
+
+def _check_param(key: str, value: float) -> None:
+    """Значения, которые стратегия молча исправила бы или с которыми никогда не сработает."""
+    if value <= 0:
+        raise CliError(f"параметр {key} должен быть больше нуля: {value:g}")
+    if key == "rr" and value < MIN_RR:
+        raise CliError(f"rr={value:g} меньше минимума {MIN_RR:g} (стратегия всё равно взяла бы {MIN_RR:g})")
+    limit = LOOKBACK_LIMITS.get(key)
+    if limit is not None and value >= limit:
+        raise CliError(f"{key}={value:g}: окно должно быть меньше {limit} свечей истории")
 
 
 def save_rules(path: Path, rules: dict[str, SymbolRules]) -> None:
@@ -108,11 +124,15 @@ def validate(
     rules: dict[str, SymbolRules],
     periods: tuple[Period, Period, Period],
     log_path: Path,
+    windows_utc: list[time],
 ) -> dict:
     train, val, _holdout = periods  # свечи holdout не читаются: end каждого прогона <= его начала
     entry: dict = {"name": strategy.name, "params": strategy.params}
     for label, period in (("train", train), ("validation", val)):
-        result = run_backtest([strategy], store, rules, period.start, period.end, START_EQUITY_USDT)
+        result = run_backtest(
+            [strategy], store, rules, period.start, period.end, START_EQUITY_USDT,
+            windows_utc=windows_utc,
+        )  # fmt: skip
         entry[label] = {**summarize(result), "btc_hold_pct": btc_hold_pct(store, period)}
         _print_summary(label, entry[label])
     save_validation(log_path, strategy.version(), entry)
@@ -125,10 +145,13 @@ def holdout_cmd(
     rules: dict[str, SymbolRules],
     periods: tuple[Period, Period, Period],
     log: HoldoutLog,
+    windows_utc: list[time],
 ) -> bool:
     hold = periods[2]
     try:
-        verdict, summary = run_holdout(strategy, store, rules, hold, START_EQUITY_USDT, log)
+        verdict, summary = run_holdout(
+            strategy, store, rules, hold, START_EQUITY_USDT, log, windows_utc
+        )
     except HoldoutAlreadyRun:
         print(f"Версия {strategy.version()} уже запускалась на holdout — повтор запрещён.")
         return False
@@ -150,7 +173,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--param", action="append", default=[], metavar="k=v")
     args = parser.parse_args(argv)
 
-    db = Settings().db_path
+    settings = Settings()  # без .env — значения по умолчанию (окна как у бота)
+    db = settings.db_path
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db)
     CandleStore.ensure_schema(conn)
@@ -167,11 +191,12 @@ def main(argv: list[str] | None = None) -> int:
             strategy = make_strategy(args.strategy, args.param)
             rules = load_rules(DATA_DIR / RULES_FILE)
             periods = data_periods(store)
+            windows = settings.window_times_utc()
             if args.cmd == "validate":
-                validate(strategy, store, rules, periods, DATA_DIR / VALIDATION_FILE)
+                validate(strategy, store, rules, periods, DATA_DIR / VALIDATION_FILE, windows)
             else:
                 log = HoldoutLog(DATA_DIR / "holdout_log.json")
-                if not holdout_cmd(strategy, store, rules, periods, log):
+                if not holdout_cmd(strategy, store, rules, periods, log, windows):
                     return 1
     except CliError as e:
         print(e, file=sys.stderr)

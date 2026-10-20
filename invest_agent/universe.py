@@ -3,13 +3,18 @@ from datetime import datetime, timedelta
 from invest_agent.models import Candle, SymbolRules
 
 EXCLUDED_BASES = frozenset({
-    "USDC", "FDUSD", "TUSD", "DAI", "USDP", "EUR", "AEUR", "USDE",
-    "WBTC", "WBETH", "BETH", "STETH",
+    # стейблкоины (USD, EUR)
+    "USDC", "FDUSD", "TUSD", "DAI", "USDP", "EUR", "AEUR", "USDE", "USD1", "EURI", "XUSD",
+    "PYUSD", "BFUSD", "RLUSD", "USDS", "BUSD", "SUSD", "UST",
+    # обёрнутые и стейкинговые токены
+    "WBTC", "WBETH", "BETH", "STETH", "WSTETH", "BNSOL",
 })
 LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR")
 ALWAYS_INCLUDED = ("BTCUSDT", "ETHUSDT")
 HISTORY_DAYS = 365
 VOLUME_DAYS = 30
+PEG_DAYS = 90
+PEG_BAND = 0.02
 
 
 def _base(symbol: str) -> str:
@@ -29,6 +34,16 @@ def _closed(candles: list[Candle], now: datetime) -> list[Candle]:
     return sorted((c for c in candles if c.close_time <= now), key=lambda c: c.open_time)
 
 
+def _pegged(closed: list[Candle], now: datetime) -> bool:
+    """Все дневные закрытия за PEG_DAYS в пределах ±PEG_BAND от среднего — новый стейблкоин."""
+    since = now - timedelta(days=PEG_DAYS)
+    closes = [c.close for c in closed if c.close_time > since]
+    if not closes:
+        return False
+    mean = sum(closes) / len(closes)
+    return mean > 0 and all(abs(x / mean - 1) <= PEG_BAND for x in closes)
+
+
 def select_universe(
     rules: dict[str, SymbolRules],
     daily: dict[str, list[Candle]],
@@ -43,7 +58,8 @@ def select_universe(
             continue
         closed = _closed(daily.get(symbol, []), now)
         volume[symbol] = sum(c.quote_volume for c in closed if c.close_time > vol_start)
-        if closed and closed[0].open_time <= now - timedelta(days=HISTORY_DAYS):
+        long_enough = closed and closed[0].open_time <= now - timedelta(days=HISTORY_DAYS)
+        if long_enough and not _pegged(closed, now):
             eligible.append(symbol)
 
     # BTC/ETH bypass the history and volume filters (only need to be in rules)

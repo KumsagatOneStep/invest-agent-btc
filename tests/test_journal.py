@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from invest_agent.execution import net_pnl
+from invest_agent.execution import net_pnl, unrealized_pnl
 from invest_agent.journal import Journal, connect, migrate
 from invest_agent.models import Outcome, Rejection, SignalCandidate, Sizing
 
@@ -61,7 +61,8 @@ def test_equity_unrealized_and_missing_mark(j):
     pid = new_pos(j, "main")
     assert j.equity("main", {"BTCUSDT": 120.0}) == 500.0  # pending
     j.apply_outcome(pid, Outcome("open", T0, 100.0, None, None))
-    assert j.equity("main", {"BTCUSDT": 110.0}) == pytest.approx(510.0)
+    # отметка с учётом проскальзывания и комиссий выхода — как в бэктесте
+    assert j.equity("main", {"BTCUSDT": 110.0}) == pytest.approx(500.0 + unrealized_pnl(1.0, 100.0, 110.0))
     assert j.equity("main", {}) == 500.0
 
 

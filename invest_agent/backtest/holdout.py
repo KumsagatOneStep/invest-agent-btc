@@ -1,12 +1,13 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from pathlib import Path
 
 from invest_agent.backtest.engine import Period, btc_hold_pct, run_backtest, summarize
 from invest_agent.backtest.gate import GateVerdict, gate
+from invest_agent.config import DEFAULT_WINDOWS_UTC
 from invest_agent.data.candles import CandleStore
 from invest_agent.models import SymbolRules
-from invest_agent.strategies.base import Strategy
+from invest_agent.strategies.base import Strategy, code_hash
 
 
 class HoldoutAlreadyRun(Exception):
@@ -65,11 +66,14 @@ def run_holdout(
     period: Period,
     start_equity: float,
     log: HoldoutLog,
+    windows_utc: list[time] = DEFAULT_WINDOWS_UTC,
 ) -> tuple[GateVerdict, dict]:
     version = strategy.version()
     if log.already_run(version):
         raise HoldoutAlreadyRun(version)
-    result = run_backtest([strategy], store, rules, period.start, period.end, start_equity)
+    result = run_backtest(
+        [strategy], store, rules, period.start, period.end, start_equity, windows_utc=windows_utc
+    )
     verdict = gate(result)
     summary = {
         **summarize(result),
@@ -77,6 +81,7 @@ def run_holdout(
         "name": strategy.name,
         "params": strategy.params,
         "period": [period.start.isoformat(), period.end.isoformat()],
+        "code_hash": code_hash(),  # для аудита: какой код прошёл holdout
     }
     log.record(version, verdict, summary)
     return verdict, summary

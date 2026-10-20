@@ -5,9 +5,9 @@ from datetime import UTC, datetime, time, timedelta
 
 import pandas as pd
 
-from invest_agent.config import DEFAULT_WINDOWS_UTC, FEE, MAX_HOLD, SLIPPAGE
+from invest_agent.config import DEFAULT_WINDOWS_UTC, MAX_HOLD, SLIPPAGE
 from invest_agent.data.candles import CandleStore, to_frame
-from invest_agent.execution import net_pnl, next_window, simulate
+from invest_agent.execution import net_pnl, next_window, simulate, unrealized_pnl
 from invest_agent.models import Candle, Outcome, Rejection, SignalCandidate, SymbolRules
 from invest_agent.risk import (
     DDState,
@@ -148,11 +148,6 @@ def universe_anchors(start: datetime, end: datetime) -> list[datetime]:
         out.append(first)
 
 
-def _unrealized(p: _Position, mark: float) -> float:
-    exit_price = mark * (1 - SLIPPAGE)
-    return p.qty * (exit_price - p.entry_price) - FEE * p.qty * (p.entry_price + exit_price)
-
-
 def _close_at_end(outcome: Outcome, sim: list[Candle]) -> Outcome:
     last = sim[-1]
     return replace(
@@ -198,7 +193,8 @@ def run_backtest(
         for p in active:
             if p.trade is not None and p.entry_time is not None and p.entry_time < t:
                 mark = data[p.sig.symbol].mark(t)
-                equity += _unrealized(p, mark if mark is not None else p.entry_price)
+                mark_price = mark if mark is not None else p.entry_price
+                equity += unrealized_pnl(p.qty, p.entry_price, mark_price)
         times.append(t)
         values.append(equity)
 

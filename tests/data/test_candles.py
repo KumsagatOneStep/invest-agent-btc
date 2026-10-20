@@ -48,7 +48,8 @@ def test_store_refresh_is_incremental():
     client = FakeClient(10)
     now1 = T0 + 5 * HOUR
     store.refresh(client, "BTCUSDT", "1h", now1)
-    assert client.calls[0][2] == now1 - timedelta(days=4 * 365)
+    # 4 года + 7 дней запаса: первый якорь train (конец − 3×365) видит ≥ 365 дней истории
+    assert client.calls[0][2] == now1 - timedelta(days=4 * 365 + 7)
     assert store.last_close_time("BTCUSDT", "1h") == candle(4).close_time
 
     store.refresh(client, "BTCUSDT", "1h", T0 + 8 * HOUR)

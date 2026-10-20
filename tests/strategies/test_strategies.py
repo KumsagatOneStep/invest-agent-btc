@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from invest_agent.config import MIN_RR
+from invest_agent.strategies import base
 from invest_agent.strategies.base import closed_only
 from invest_agent.strategies.meanrev import MeanReversion
 from invest_agent.strategies.registry import load_approved
@@ -135,3 +136,30 @@ def test_load_approved(tmp_path: Path, caplog):
     assert [s.name for s in loaded] == ["trend"]
     assert loaded[0].params == good.params
     assert len(caplog.records) == 2
+
+
+def test_code_hash_covers_signal_and_backtest_modules():
+    names = {p.as_posix() for p in base.tracked_sources()}
+    for expected in (
+        "strategies/base.py", "strategies/trend.py", "strategies/meanrev.py",
+        "indicators.py", "execution.py", "risk.py", "universe.py", "backtest/engine.py",
+    ):  # fmt: skip
+        assert expected in names
+
+
+def test_code_hash_changes_with_source(tmp_path: Path):
+    for rel in base.tracked_sources():
+        dst = tmp_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes((base.PACKAGE_ROOT / rel).read_bytes())
+    same = base.code_hash(tmp_path)
+    assert same == base.code_hash(base.PACKAGE_ROOT)
+    (tmp_path / "execution.py").write_text("# edited\n", encoding="utf-8")
+    assert base.code_hash(tmp_path) != same
+
+
+def test_version_tracks_code(monkeypatch):
+    before = TrendBreakout().version()
+    assert before == TrendBreakout().version()
+    monkeypatch.setattr(base, "code_hash", lambda root=base.PACKAGE_ROOT: "other-code")
+    assert TrendBreakout().version() != before

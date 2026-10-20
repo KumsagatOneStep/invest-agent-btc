@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 import pandas as pd
@@ -10,7 +11,9 @@ from invest_agent.config import MIN_RR
 from invest_agent.indicators import atr
 from invest_agent.models import SignalCandidate
 
-CODE_VERSION = "1"
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+# Модули, от которых зависят сигналы и результат бэктеста: их правка = новая версия стратегии
+TRACKED = ("indicators.py", "execution.py", "risk.py", "universe.py", "backtest/engine.py")
 ATR_N = 14
 ENTRY_ATR_FRAC = 0.25
 
@@ -31,8 +34,21 @@ def closed_only(df: pd.DataFrame, now: datetime) -> pd.DataFrame:
     return df[df.index <= now]
 
 
+def tracked_sources(root: Path = PACKAGE_ROOT) -> list[Path]:
+    """Пути (относительно пакета) всех файлов, входящих в хеш кода."""
+    strategies = [p.relative_to(root) for p in (root / "strategies").glob("*.py")]
+    return sorted({*strategies, *(Path(t) for t in TRACKED)})
+
+
+def code_hash(root: Path = PACKAGE_ROOT) -> str:
+    h = hashlib.sha1()
+    for rel in tracked_sources(root):
+        h.update(rel.as_posix().encode() + b"\0" + (root / rel).read_bytes() + b"\0")
+    return h.hexdigest()
+
+
 def compute_version(name: str, params: dict[str, float]) -> str:
-    payload = name + json.dumps(params, sort_keys=True) + CODE_VERSION
+    payload = name + json.dumps(params, sort_keys=True) + code_hash()
     return hashlib.sha1(payload.encode()).hexdigest()
 
 

@@ -10,11 +10,13 @@ def _rules(*bases: str) -> dict[str, SymbolRules]:
     return {f"{b}USDT": SymbolRules(f"{b}USDT", 0.01, 0.001, 5.0) for b in bases}
 
 
-def _days(n: int, qv: float, end: datetime = NOW) -> list[Candle]:
+def _days(n: int, qv: float, end: datetime = NOW, swing: float = 0.1) -> list[Candle]:
+    """Дневные свечи; цена закрытия чередуется 1 и 1+swing (обычная волатильность)."""
     out = []
     for i in range(n, 0, -1):
         close = end - timedelta(days=i - 1)
-        out.append(Candle(close - timedelta(days=1), close, 1, 1, 1, 1, 1, qv))
+        price = 1 + swing * (i % 2)
+        out.append(Candle(close - timedelta(days=1), close, 1, 1, 1, price, 1, qv))
     return out
 
 
@@ -35,6 +37,7 @@ def test_btc_eth_skipped_if_not_in_rules():
 
 def test_excludes_stablecoins_wrapped_and_leveraged():
     bad = ["USDC", "FDUSD", "TUSD", "DAI", "USDP", "EUR", "AEUR", "USDE",
+           "USD1", "EURI", "XUSD", "PYUSD", "BFUSD", "RLUSD", "USDS", "BNSOL",
            "WBTC", "WBETH", "BETH", "STETH", "BTCUP", "BTCDOWN", "ETHBULL", "ETHBEAR"]
     rules = _rules("BTC", "ETH", "GOOD", "JUP", "SYRUP", *bad)
     daily = {s: _days(400, 1e9) for s in rules}
@@ -77,3 +80,15 @@ def test_volume_window_is_30_calendar_days_even_with_gaps():
         "BBBUSDT": old + _days(3, 20.0),  # gap: older candles are outside 30 days
     }
     assert select_universe(rules, daily, NOW, size=1) == ["AAAUSDT"]
+
+
+def test_excludes_low_volatility_peg_by_data():
+    rules = _rules("PEG", "MOVE", "OLDPEG")
+    daily = {
+        "PEGUSDT": _days(400, 1e12, swing=0.03),  # закрытия в пределах ±2% от среднего за 90 дней
+        "MOVEUSDT": _days(400, 1.0, swing=0.05),
+        # колебался раньше, но последние 90 дней стоит как привязанный
+        "OLDPEGUSDT": _days(300, 1e12, end=NOW - timedelta(days=90), swing=0.5)
+        + _days(90, 1e12, swing=0.01),
+    }
+    assert select_universe(rules, daily, NOW, size=10) == ["MOVEUSDT"]

@@ -111,7 +111,10 @@ def klines_handler(window_at: datetime, fail: dict[str, int] | None = None):
         end = int(p["endTime"])
         rows, t = [], start
         while t + step - 1 <= end and len(rows) < 1000:
-            rows.append([t, "100", "101", "99.5", "100", "10", t + step - 1, "1000", 1, "0", "0", "0"])
+            # дневные закрытия колеблются ±10%, иначе монета похожа на стейблкоин
+            close = ("90" if (t // step) % 2 else "110") if interval == "1d" else "100"
+            high, low = ("111", "89") if interval == "1d" else ("101", "99.5")
+            rows.append([t, "100", high, low, close, "10", t + step - 1, "1000", 1, "0", "0", "0"])
             t += step
         return httpx.Response(200, json=rows)
 

@@ -8,6 +8,7 @@ from invest_agent.backtest import __main__ as cli
 from invest_agent.backtest.engine import Period
 from invest_agent.backtest.holdout import HoldoutLog
 from invest_agent.backtest.report import build_report
+from invest_agent.config import DEFAULT_WINDOWS_UTC
 from invest_agent.data.candles import CandleStore
 from invest_agent.models import Candle, SymbolRules
 from invest_agent.strategies.trend import TrendBreakout
@@ -70,7 +71,7 @@ def test_validate_never_reads_holdout_candles(tmp_path):
         Period(dt(2026, 3, 1), dt(2026, 4, 1)),
     )
     rules = {"BTCUSDT": SymbolRules("BTCUSDT", 0.01, 0.001, 5.0)}
-    entry = cli.validate(TrendBreakout(), store, rules, periods, tmp_path / "val.json")
+    entry = cli.validate(TrendBreakout(), store, rules, periods, tmp_path / "val.json", DEFAULT_WINDOWS_UTC)
 
     assert store.ends and max(store.ends) <= periods[2].start
     assert set(entry) >= {"train", "validation"}
@@ -88,8 +89,8 @@ def test_holdout_cmd_refuses_second_run(tmp_path, capsys):
     )
     rules = {"BTCUSDT": SymbolRules("BTCUSDT", 0.01, 0.001, 5.0)}
     log = HoldoutLog(tmp_path / "holdout_log.json")
-    assert cli.holdout_cmd(TrendBreakout(), store, rules, periods, log)
-    assert not cli.holdout_cmd(TrendBreakout(), store, rules, periods, log)
+    assert cli.holdout_cmd(TrendBreakout(), store, rules, periods, log, DEFAULT_WINDOWS_UTC)
+    assert not cli.holdout_cmd(TrendBreakout(), store, rules, periods, log, DEFAULT_WINDOWS_UTC)
     assert "уже запускалась" in capsys.readouterr().out
 
 
@@ -140,3 +141,64 @@ def test_default_and_explicit_int_param_give_same_version():
     )
     with pytest.raises(cli.CliError, match="целым"):
         cli.make_strategy("trend", ["donchian_n=20.5"])
+
+
+@pytest.mark.parametrize(
+    "name,param",
+    [
+        ("trend", "rr=1.4"),  # стратегия подняла бы до 1.5 — та же торговля под другой версией
+        ("trend", "atr_k=0"),
+        ("trend", "atr_k=-1"),
+        ("trend", "donchian_n=300"),  # окно ≥ H4_LOOKBACK — сигнал никогда не появится
+        ("trend", "trend_ema=300"),  # окно ≥ D1_LOOKBACK
+        ("meanrev", "rsi_n=300"),
+        ("meanrev", "rsi_max=0"),
+    ],
+)
+def test_make_strategy_rejects_clamped_or_dead_params(name, param):
+    with pytest.raises(cli.CliError):
+        cli.make_strategy(name, [param])
+
+
+def test_make_strategy_accepts_edge_values():
+    assert cli.make_strategy("trend", ["rr=1.5", "donchian_n=299", "trend_ema=299"])
+
+
+def test_validate_and_holdout_use_settings_windows(tmp_path, monkeypatch):
+    from datetime import time
+
+    seen = []
+
+    def fake_run(*a, **k):
+        seen.append(k.get("windows_utc"))
+        import pandas as pd
+
+        from invest_agent.backtest.engine import BacktestResult
+
+        return BacktestResult([], pd.Series(dtype=float), dt(2026, 1, 1), dt(2026, 2, 1))
+
+    monkeypatch.setattr(cli, "run_backtest", fake_run)
+    monkeypatch.setattr("invest_agent.backtest.holdout.run_backtest", fake_run)
+    periods = (
+        Period(dt(2026, 1, 1), dt(2026, 2, 1)),
+        Period(dt(2026, 2, 1), dt(2026, 3, 1)),
+        Period(dt(2026, 3, 1), dt(2026, 4, 1)),
+    )
+    windows = [time(4, 30)]
+    cli.validate(TrendBreakout(), spy_store(), {}, periods, tmp_path / "v.json", windows)
+    log = HoldoutLog(tmp_path / "h.json")
+    cli.holdout_cmd(TrendBreakout(), spy_store(), {}, periods, log, windows)
+    assert seen == [windows, windows, windows]
+
+
+def test_main_passes_settings_windows(tmp_path, monkeypatch):
+    from datetime import time
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WINDOWS", '["09:30"]')
+    got = {}
+    monkeypatch.setattr(cli, "load_rules", lambda p: {})
+    monkeypatch.setattr(cli, "data_periods", lambda store: None)
+    monkeypatch.setattr(cli, "validate", lambda *a: got.setdefault("windows", a[-1]))
+    assert cli.main(["validate", "--strategy", "trend"]) == 0
+    assert got["windows"] == [time(4, 30)]

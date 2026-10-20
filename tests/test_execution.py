@@ -3,7 +3,7 @@ from datetime import UTC, datetime, time, timedelta
 import pytest
 
 from invest_agent.config import FEE, SLIPPAGE
-from invest_agent.execution import net_pnl, next_window, simulate
+from invest_agent.execution import net_pnl, next_window, simulate, unrealized_pnl
 from invest_agent.models import Candle, Outcome, SignalCandidate
 
 T0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
@@ -116,3 +116,13 @@ def test_next_window_rolls_over_midnight():
 
 def test_next_window_strictly_after():
     assert next_window(datetime(2026, 1, 1, 3, 0, tzinfo=UTC), WINDOWS) == datetime(2026, 1, 1, 15, 0, tzinfo=UTC)
+
+
+def test_unrealized_pnl_includes_exit_slippage_and_fees():
+    exit_ = 110 * (1 - SLIPPAGE)
+    expected = 2 * (exit_ - 100.0) - FEE * 2 * (100.0 + exit_)
+    assert unrealized_pnl(2.0, 100.0, 110.0) == pytest.approx(expected)
+    # то же, что закрыть позицию по отметке
+    assert unrealized_pnl(2.0, 100.0, 110.0) == pytest.approx(
+        net_pnl(Outcome("time", T0, 100.0, T0 + H, exit_), 2.0)[0]
+    )
