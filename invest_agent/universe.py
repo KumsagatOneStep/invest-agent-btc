@@ -51,3 +51,8 @@ def select_universe(
     others = sorted((s for s in eligible if s not in forced), key=lambda s: (-volume[s], s))
     picked = forced + others[: max(size - len(forced), 0)]
     return sorted(picked, key=lambda s: (-volume[s], s))
+
+
+def candidate_symbols(rules: dict[str, SymbolRules]) -> list[str]:
+    """Пары, прошедшие фильтры состава (без фильтра объёма и истории)."""
+    return sorted(s for s in rules if not _excluded(s, rules))
