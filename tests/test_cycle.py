@@ -373,6 +373,7 @@ def test_sunday_evening_has_weekly_stats(env):
     assert any(m.startswith("<b>Вечерняя сводка 25.10 20:00 (UTC+5)</b>") for m in msgs)
     weekly = [m for m in msgs if m.startswith("<b>Недельная статистика</b>")]
     assert len(weekly) == 1 and "Критерии перехода на деньги" in weekly[0]
+    assert "По стратегиям:\ntrend: сигналов 1" in weekly[0]  # сигнал этого окна, спец §12
     assert msgs.index(weekly[0]) == len(msgs) - 1
 
 

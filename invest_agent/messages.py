@@ -6,6 +6,7 @@ from invest_agent.models import SignalCandidate, Sizing
 from invest_agent.stats import BookStats, Criteria
 
 LIMIT = 4096
+MAX_STRATEGY_LINES = 10
 _BUDGET = {
     "budget_80": "Расход на Claude API достиг 80% месячного лимита. Объяснения сигналов теперь пишет дешёвая модель.",
     "budget_100": "Месячный лимит Claude API исчерпан (100%). Claude не вызывается, новые сигналы получают статус REVIEW и не отправляются.",
@@ -175,6 +176,20 @@ def _book_block(title: str, s: BookStats, usd_kzt: float | None) -> str:
     )
 
 
+def _strategy_lines(by: dict[str, BookStats], usd_kzt: float | None) -> list[str]:
+    if not by:
+        return []
+    items = sorted(by.items())
+    lines = ["По стратегиям:"] + [
+        f"{_e(name)}: сигналов {s.n_signals}, прибыльных {s.win_rate * 100:.0f}%, "
+        f"итого {_usd_kzt(s.net_usdt, usd_kzt)}"
+        for name, s in items[:MAX_STRATEGY_LINES]
+    ]
+    if len(items) > MAX_STRATEGY_LINES:
+        lines.append(f"…и ещё {len(items) - MAX_STRATEGY_LINES}")
+    return lines
+
+
 def weekly_message(
     stats_main: BookStats,
     stats_research: BookStats,
@@ -182,12 +197,16 @@ def weekly_message(
     costs: float,
     btc_return: float | None = None,
     usd_kzt: float | None = None,
+    by_strategy: dict[str, dict[str, BookStats]] | None = None,
 ) -> str:
-    """costs — расходы на сервер и API за неделю, $."""
+    """costs — расходы на сервер и API за неделю, $; by_strategy — {книга: {стратегия: stats}}."""
+    by = by_strategy or {}
     lines = [
         "<b>Недельная статистика</b>",
         _book_block("Основной портфель (одобрено Claude)", stats_main, usd_kzt),
+        *_strategy_lines(by.get("main", {}), usd_kzt),
         _book_block("Исследовательский (все сигналы кода)", stats_research, usd_kzt),
+        *_strategy_lines(by.get("research", {}), usd_kzt),
         f"Расходы на сервер и API: {_usd_kzt(costs, usd_kzt)}",
         f"Результат основного после расходов: {_usd_kzt(stats_main.net_usdt - costs, usd_kzt)}",
     ]

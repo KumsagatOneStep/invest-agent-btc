@@ -23,7 +23,7 @@ from invest_agent.journal import Journal, connect, migrate
 from invest_agent.llm.budget import Budget
 from invest_agent.llm.client import make_client
 from invest_agent.messages import failure_message, weekly_message
-from invest_agent.stats import book_stats, btc_hold_return, costs, golive_check
+from invest_agent.stats import book_stats, btc_hold_return, costs, golive_check, strategy_stats
 
 log = logging.getLogger(__name__)
 Send = Callable[[str], Awaitable[None]]
@@ -95,6 +95,10 @@ def _stats_text(deps: Deps) -> str:
         costs(j, deps.settings, main.stage_started_at, now),
         btc_hold_return(deps.store, main.stage_started_at, now),
         usd_kzt(now, deps.conn, deps.http),
+        {
+            "main": strategy_stats(j, "main", main.stage_started_at, now),
+            "research": strategy_stats(j, "research", research.stage_started_at, now),
+        },
     )
     return text.replace("Недельная статистика", "Статистика с начала этапа", 1)
 

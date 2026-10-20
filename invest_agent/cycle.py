@@ -33,7 +33,14 @@ from invest_agent.messages import (
 )
 from invest_agent.models import Rejection, SignalCandidate, SymbolRules
 from invest_agent.risk import risk_pct_for, round_prices, size_position, step_drawdown
-from invest_agent.stats import book_stats, btc_hold_return, costs, golive_check, halt_analysis
+from invest_agent.stats import (
+    book_stats,
+    btc_hold_return,
+    costs,
+    golive_check,
+    halt_analysis,
+    strategy_stats,
+)
 from invest_agent.strategies.base import Strategy
 from invest_agent.strategies.registry import load_approved
 from invest_agent.universe import candidate_symbols, select_universe
@@ -342,6 +349,7 @@ def _process(window_at: datetime, deps: Deps, m: _Market, tz: timezone) -> _Resu
                     costs(j, s, since, until),
                     btc_hold_return(store, since, window_at),
                     m.usd_kzt,
+                    {b: strategy_stats(j, b, since, until) for b in BOOKS},
                 )
             )
     return _Result(n_sent, notes, body, budget_events, tail)

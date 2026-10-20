@@ -96,6 +96,20 @@ def test_weekly_message():
     assert "27" in m and "не выполнены" in m
 
 
+def test_weekly_message_per_strategy_lines():
+    s = BookStats(10, 8, 2, 0.5, 20.0, -10.0, 2.0, 30.0, 0.05)
+    c = Criteria(True, False, True, False, True, {})
+    by = {"main": {"trend": s, "<b>x": s}, "research": {"meanrev": s}}
+    m = weekly_message(s, s, c, 3.0, by_strategy=by)
+    assert "По стратегиям" in m
+    assert "trend: сигналов 10, прибыльных 50%, итого $30.00" in m
+    assert "&lt;b&gt;x:" in m and "meanrev:" in m
+    assert m.index("trend:") < m.index("Исследовательский") < m.index("meanrev:")
+    many = {"main": {f"s{i}" * 200: s for i in range(50)}, "research": {}}
+    big = weekly_message(s, s, c, 3.0, by_strategy=many)
+    assert len(big) <= 4096 and _valid_html(big)
+
+
 def _valid_html(m: str) -> bool:
     import re
 

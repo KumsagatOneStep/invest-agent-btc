@@ -7,7 +7,14 @@ from invest_agent.config import Settings
 from invest_agent.data.candles import CandleStore
 from invest_agent.journal import Journal, migrate
 from invest_agent.models import Candle, Outcome, SignalCandidate, Sizing
-from invest_agent.stats import book_stats, btc_hold_return, costs, golive_check, halt_analysis
+from invest_agent.stats import (
+    book_stats,
+    btc_hold_return,
+    costs,
+    golive_check,
+    halt_analysis,
+    strategy_stats,
+)
 
 T0 = datetime(2026, 1, 1, 3, 0, tzinfo=UTC)
 END = T0 + timedelta(days=30)
@@ -228,3 +235,15 @@ def test_golive_dd_floor_from_book_peak(j):
     j.conn.commit()
     c = golive_check(j, _store(100.5), now)
     assert not c.dd_ok  # сейчас ~1100: просадка ~27% от максимума этапа
+
+
+def test_strategy_stats_split_by_strategy(j):
+    a = add(j, 20.0, strategy="trend", day=1)
+    b = add(j, -10.0, strategy="meanrev", day=2)
+    add(j, 5.0, strategy="trend", day=3, book="research")
+    by = strategy_stats(j, "main", T0, END)
+    assert set(by) == {"trend", "meanrev"}
+    assert by["trend"].net_usdt == pytest.approx(pnl_of(j, a))
+    assert by["meanrev"].net_usdt == pytest.approx(pnl_of(j, b))
+    assert by["trend"].n_signals == 1 and by["meanrev"].win_rate == 0.0
+    assert book_stats(j, "main", T0, END, strategy="trend").net_usdt == by["trend"].net_usdt

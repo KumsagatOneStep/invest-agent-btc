@@ -54,23 +54,33 @@ def _iso(dt: datetime) -> str:
 
 
 def _book_stats(
-    journal: Journal, book: str, since: datetime, until: datetime, stage: int | None
+    journal: Journal,
+    book: str,
+    since: datetime,
+    until: datetime,
+    stage: int | None,
+    strategy: str | None = None,
 ) -> BookStats:
     conn = journal.conn
     st = "" if stage is None else f" AND p.stage={int(stage)}"
+    extra: tuple[str, ...] = ()
+    if strategy is not None:
+        st += " AND s.strategy=?"
+        extra = (strategy,)
     n_signals, n_entered, n_expired = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(p.entry_time IS NOT NULL), 0),"
         " COALESCE(SUM(p.status='expired'), 0)"
         " FROM positions p JOIN signals s ON s.id=p.signal_id"
         f" WHERE p.book=? AND p.status!='rejected' AND s.created_at>=? AND s.created_at<?{st}",
-        (book, _iso(since), _iso(until)),
+        (book, _iso(since), _iso(until), *extra),
     ).fetchone()
     pnls = [
         r[0]
         for r in conn.execute(
-            f"SELECT p.pnl_usdt FROM positions p WHERE p.book=? AND p.status IN {_CLOSED}"
+            "SELECT p.pnl_usdt FROM positions p JOIN signals s ON s.id=p.signal_id"
+            f" WHERE p.book=? AND p.status IN {_CLOSED}"
             f" AND p.exit_time>=? AND p.exit_time<?{st} ORDER BY p.exit_time, p.id",
-            (book, _iso(since), _iso(until)),
+            (book, _iso(since), _iso(until), *extra),
         )
     ]
     wins = [x for x in pnls if x > 0]
@@ -101,8 +111,24 @@ def _book_stats(
     )
 
 
-def book_stats(journal: Journal, book: str, since: datetime, until: datetime) -> BookStats:
-    return _book_stats(journal, book, since, until, None)
+def book_stats(
+    journal: Journal, book: str, since: datetime, until: datetime, strategy: str | None = None
+) -> BookStats:
+    return _book_stats(journal, book, since, until, None, strategy)
+
+
+def strategy_stats(
+    journal: Journal, book: str, since: datetime, until: datetime
+) -> dict[str, BookStats]:
+    """book_stats по каждой стратегии, у которой в периоде были сигналы или закрытые сделки."""
+    rows = journal.conn.execute(
+        "SELECT DISTINCT s.strategy FROM positions p JOIN signals s ON s.id=p.signal_id"
+        " WHERE p.book=? AND p.status!='rejected'"
+        " AND ((s.created_at>=? AND s.created_at<?) OR (p.exit_time>=? AND p.exit_time<?))"
+        " ORDER BY s.strategy",
+        (book, *(_iso(x) for x in (since, until, since, until))),
+    ).fetchall()
+    return {r[0]: book_stats(journal, book, since, until, r[0]) for r in rows}
 
 
 def costs(journal: Journal, settings: Settings, since: datetime, until: datetime) -> float:
