@@ -7,6 +7,7 @@ from pathlib import Path
 from invest_agent.data.candles import CandleStore
 from invest_agent.data.fx import ensure_schema as ensure_fx_schema
 from invest_agent.execution import net_pnl
+from invest_agent.llm.budget import ensure_schema as ensure_budget_schema
 from invest_agent.models import Outcome, Rejection, SignalCandidate, Sizing
 from invest_agent.risk import DDState, OpenRisk
 
@@ -79,6 +80,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
     CandleStore.ensure_schema(conn)
     ensure_fx_schema(conn)
+    ensure_budget_schema(conn)
     conn.executemany(
         "INSERT OR IGNORE INTO books (book, stage, stage_started_at, start_equity, peak, dd_state, paused)"
         " VALUES (?, 0, NULL, 0, 0, 'NORMAL', 0)",

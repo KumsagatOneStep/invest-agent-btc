@@ -20,7 +20,7 @@ dependencies = [
 dev = ["pytest", "pytest-asyncio", "respx", "ruff"]
 
 [tool.setuptools]
-packages = ["invest_agent", "invest_agent.data", "invest_agent.strategies", "invest_agent.backtest"]
+packages = ["invest_agent", "invest_agent.data", "invest_agent.strategies", "invest_agent.backtest", "invest_agent.llm"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
