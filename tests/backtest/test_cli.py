@@ -129,3 +129,14 @@ def test_report_states_survivorship_and_holdout_count():
     assert "выживших" in text
     assert "проверено на holdout: 1" in text
     assert "BTC buy&hold" in text
+
+
+def test_default_and_explicit_int_param_give_same_version():
+    assert cli.make_strategy("trend", []).version() == (
+        cli.make_strategy("trend", ["donchian_n=20"]).version()
+    )
+    assert cli.make_strategy("meanrev", ["rsi_n=14"]).version() == (
+        cli.make_strategy("meanrev", []).version()
+    )
+    with pytest.raises(cli.CliError, match="целым"):
+        cli.make_strategy("trend", ["donchian_n=20.5"])

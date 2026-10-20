@@ -9,6 +9,7 @@ from invest_agent.backtest.engine import (
     run_backtest,
     split_periods,
     summarize,
+    universe_anchors,
 )
 from invest_agent.config import FEE, SLIPPAGE
 from invest_agent.data.candles import CandleStore
@@ -125,3 +126,22 @@ def test_summarize_and_max_drawdown():
     r = BacktestResult([], eq, dt(2026, 1, 1), dt(2026, 1, 4))
     assert abs(r.max_drawdown() - 0.25) < 1e-12
     assert summarize(r)["trades"] == 0
+
+
+def test_universe_anchors_start_and_month_firsts():
+    anchors = universe_anchors(dt(2026, 1, 10, 5), dt(2026, 3, 1))
+    assert anchors == [dt(2026, 1, 10, 5), dt(2026, 2, 1)]  # 1 марта == end, не внутри
+    assert universe_anchors(dt(2026, 12, 15), dt(2027, 2, 2)) == [
+        dt(2026, 12, 15), dt(2027, 1, 1), dt(2027, 2, 1),
+    ]  # fmt: skip
+
+
+def test_engine_warns_once_for_universe_member_without_candles(caplog):
+    start, end = dt(2026, 3, 1), dt(2026, 3, 3)
+    store = make_store()
+    for s in ("BTCUSDT", "ETHUSDT"):
+        store.upsert(s, "1d", flat(start - timedelta(days=400), end, D1))
+    with caplog.at_level("WARNING"):
+        run_backtest([Fixed(set())], store, rules_for("BTCUSDT", "ETHUSDT"), start, end, 1000.0)
+    msgs = [r.getMessage() for r in caplog.records if "нет свечей" in r.getMessage()]
+    assert sorted(m.split(":")[0] for m in msgs) == ["BTCUSDT", "ETHUSDT"]

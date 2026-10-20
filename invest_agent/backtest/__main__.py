@@ -5,7 +5,14 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from invest_agent.backtest.engine import Period, run_backtest, split_periods, summarize
+from invest_agent.backtest.engine import (
+    Period,
+    btc_hold_pct,
+    run_backtest,
+    split_periods,
+    summarize,
+    universe_anchors,
+)
 from invest_agent.backtest.holdout import HoldoutAlreadyRun, HoldoutLog, run_holdout
 from invest_agent.backtest.report import build_report, load_validation, save_validation
 from invest_agent.config import Settings
@@ -37,9 +44,15 @@ def make_strategy(name: str, raw_params: list[str]) -> Strategy:
         if not sep or key not in cls.DEFAULTS:
             raise CliError(f"неизвестный параметр {key!r}; допустимые: {', '.join(cls.DEFAULTS)}")
         try:
-            params[key] = float(value)
+            number = float(value)
         except ValueError:
             raise CliError(f"значение параметра {key} не число: {value!r}") from None
+        if isinstance(cls.DEFAULTS[key], int):
+            if number != int(number):
+                raise CliError(f"параметр {key} должен быть целым: {value!r}")
+            params[key] = int(number)
+        else:
+            params[key] = number
     return cls(params)
 
 
@@ -61,11 +74,6 @@ def data_periods(store: CandleStore) -> tuple[Period, Period, Period]:
     return split_periods(end - timedelta(days=365 * BACKTEST_YEARS), end)
 
 
-def btc_hold_pct(store: CandleStore, period: Period) -> float:
-    candles = store.get(BENCH, "1h", period.start, period.end)
-    return 100 * (candles[-1].close / candles[0].open - 1) if candles else 0.0
-
-
 def fetch(client: BinanceClient, store: CandleStore, rules_path: Path, now: datetime) -> None:
     rules = client.symbol_rules()
     save_rules(rules_path, rules)
@@ -76,14 +84,10 @@ def fetch(client: BinanceClient, store: CandleStore, rules_path: Path, now: date
     # 1h/4h нужны только монетам, которые хоть раз попадали во вселенную (фильтр объёма)
     start = now - timedelta(days=365 * BACKTEST_YEARS)
     daily = {s: store.get(s, "1d", datetime(2000, 1, 1, tzinfo=UTC), now) for s in symbols}
-    anchors, y, m = [start], start.year, start.month
-    while True:
-        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
-        if datetime(y, m, 1, tzinfo=UTC) >= now:
-            break
-        anchors.append(datetime(y, m, 1, tzinfo=UTC))
-    anchors.append(now)
-    needed = sorted({s for a in anchors for s in select_universe(rules, daily, a)})
+    anchors = set(universe_anchors(start, now))
+    anchors.add(now)
+    anchors.update(p.start for p in split_periods(start, now))
+    needed = sorted({s for a in sorted(anchors) for s in select_universe(rules, daily, a)})
     for i, symbol in enumerate(needed, 1):
         for interval in ("4h", "1h"):
             print(f"{interval} {i}/{len(needed)} {symbol}", flush=True)
@@ -128,7 +132,7 @@ def holdout_cmd(
     except HoldoutAlreadyRun:
         print(f"Версия {strategy.version()} уже запускалась на holdout — повтор запрещён.")
         return False
-    _print_summary("holdout", {**summary, "btc_hold_pct": btc_hold_pct(store, hold)})
+    _print_summary("holdout", summary)
     print("Ворота отбора:", "пройдены" if verdict.passed else "не пройдены")
     for reason in verdict.reasons:
         print(" -", reason)

@@ -1,4 +1,5 @@
 import bisect
+import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 
@@ -19,6 +20,7 @@ from invest_agent.risk import (
 from invest_agent.strategies.base import Strategy
 from invest_agent.universe import select_universe
 
+log = logging.getLogger(__name__)
 EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 H4_LOOKBACK = 300
 D1_LOOKBACK = 300
@@ -69,6 +71,11 @@ def split_periods(start: datetime, end: datetime) -> tuple[Period, Period, Perio
     return Period(start, val_start), Period(val_start, hold_start), Period(hold_start, end)
 
 
+def btc_hold_pct(store: CandleStore, period: Period) -> float:
+    candles = store.get("BTCUSDT", "1h", period.start, period.end)
+    return 100 * (candles[-1].close / candles[0].open - 1) if candles else 0.0
+
+
 def summarize(result: BacktestResult) -> dict[str, float]:
     n = len(result.trades)
     wins = sum(1 for t in result.trades if t.pnl_usdt > 0)
@@ -99,6 +106,8 @@ class _SymbolData:
         self.h1_close = [c.close_time for c in self.h1]
         self.h4 = to_frame(store.get(symbol, "4h", EPOCH, end))
         self.d1 = to_frame(store.get(symbol, "1d", EPOCH, end))
+        if not self.h1 or self.h4.empty:
+            log.warning("%s: во вселенной, но нет свечей 1h/4h — монета не торгуется", symbol)
 
     @staticmethod
     def _upto(df: pd.DataFrame, now: datetime, n: int) -> pd.DataFrame:
@@ -127,7 +136,7 @@ def _windows(start: datetime, end: datetime, windows_utc: list[time]) -> list[da
     return [t for t in out if start <= t < end]
 
 
-def _anchors(start: datetime, end: datetime) -> list[datetime]:
+def universe_anchors(start: datetime, end: datetime) -> list[datetime]:
     """Моменты пересчёта вселенной: start и 1-е число каждого месяца внутри периода."""
     out = [start]
     y, m = start.year, start.month
@@ -162,7 +171,7 @@ def run_backtest(
 ) -> BacktestResult:
     daily = {s: store.get(s, "1d", EPOCH, end) for s in rules}
     data: dict[str, _SymbolData] = {}
-    anchors = _anchors(start, end)
+    anchors = universe_anchors(start, end)
     universes: dict[datetime, list[str]] = {}
 
     def universe_at(t: datetime) -> list[str]:

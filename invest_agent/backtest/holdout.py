@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from invest_agent.backtest.engine import Period, run_backtest, summarize
+from invest_agent.backtest.engine import Period, btc_hold_pct, run_backtest, summarize
 from invest_agent.backtest.gate import GateVerdict, gate
 from invest_agent.data.candles import CandleStore
 from invest_agent.models import SymbolRules
@@ -73,6 +73,7 @@ def run_holdout(
     verdict = gate(result)
     summary = {
         **summarize(result),
+        "btc_hold_pct": btc_hold_pct(store, period),
         "name": strategy.name,
         "params": strategy.params,
         "period": [period.start.isoformat(), period.end.isoformat()],
