@@ -139,6 +139,16 @@ class Journal:
         assert cur.lastrowid is not None
         return cur.lastrowid
 
+    def signal(self, signal_id: int) -> SignalCandidate:
+        r = self.conn.execute(
+            "SELECT symbol, strategy, created_at, entry_low, entry_high, stop, target, features_json"
+            " FROM signals WHERE id=?",
+            (signal_id,),
+        ).fetchone()
+        if r is None:
+            raise KeyError(signal_id)
+        return SignalCandidate(r[0], r[1], _dt(r[2]), r[3], r[4], r[5], r[6], json.loads(r[7]))
+
     def set_claude(self, signal_id: int, status: str, reason: str | None, explanation: str | None) -> None:
         self.conn.execute(
             "UPDATE signals SET claude_status=?, claude_reason=?, explanation=? WHERE id=?",

@@ -171,3 +171,12 @@ def test_connect_wal_and_fk(tmp_path):
     conn = connect(tmp_path / "j.db")
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_signal_roundtrip():
+    conn = sqlite3.connect(":memory:")
+    migrate(conn)
+    j = Journal(conn)
+    assert j.signal(j.add_signal(sig("ETHUSDT"), "v1")) == sig("ETHUSDT")
+    with pytest.raises(KeyError):
+        j.signal(999)
