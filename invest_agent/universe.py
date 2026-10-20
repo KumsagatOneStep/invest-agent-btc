@@ -16,9 +16,13 @@ def _base(symbol: str) -> str:
     return symbol.removesuffix("USDT")
 
 
-def _excluded(symbol: str) -> bool:
+def _excluded(symbol: str, rules: dict[str, SymbolRules]) -> bool:
     base = _base(symbol)
-    return base in EXCLUDED_BASES or base.endswith(LEVERAGED_SUFFIXES)
+    if base in EXCLUDED_BASES:
+        return True
+    return any(
+        base.endswith(suf) and base[: -len(suf)] + "USDT" in rules for suf in LEVERAGED_SUFFIXES
+    )
 
 
 def _closed(candles: list[Candle], now: datetime) -> list[Candle]:
@@ -31,16 +35,18 @@ def select_universe(
     now: datetime,
     size: int = 10,
 ) -> list[str]:
+    vol_start = now - timedelta(days=VOLUME_DAYS)
     volume: dict[str, float] = {}
     eligible: list[str] = []
     for symbol in rules:
-        if _excluded(symbol):
+        if _excluded(symbol, rules):
             continue
         closed = _closed(daily.get(symbol, []), now)
-        volume[symbol] = sum(c.quote_volume for c in closed[-VOLUME_DAYS:])
+        volume[symbol] = sum(c.quote_volume for c in closed if c.close_time > vol_start)
         if closed and closed[0].open_time <= now - timedelta(days=HISTORY_DAYS):
             eligible.append(symbol)
 
+    # BTC/ETH bypass the history and volume filters (only need to be in rules)
     forced = [s for s in ALWAYS_INCLUDED if s in rules]
     others = sorted((s for s in eligible if s not in forced), key=lambda s: (-volume[s], s))
     picked = forced + others[: max(size - len(forced), 0)]

@@ -36,9 +36,10 @@ def test_btc_eth_skipped_if_not_in_rules():
 def test_excludes_stablecoins_wrapped_and_leveraged():
     bad = ["USDC", "FDUSD", "TUSD", "DAI", "USDP", "EUR", "AEUR", "USDE",
            "WBTC", "WBETH", "BETH", "STETH", "BTCUP", "BTCDOWN", "ETHBULL", "ETHBEAR"]
-    rules = _rules("GOOD", *bad)
+    rules = _rules("BTC", "ETH", "GOOD", "JUP", "SYRUP", *bad)
     daily = {s: _days(400, 1e9) for s in rules}
-    assert select_universe(rules, daily, NOW, size=50) == ["GOODUSDT"]
+    out = select_universe(rules, daily, NOW, size=50)
+    assert sorted(out) == ["BTCUSDT", "ETHUSDT", "GOODUSDT", "JUPUSDT", "SYRUPUSDT"]
 
 
 def test_excludes_history_shorter_than_year():
@@ -64,5 +65,15 @@ def test_uses_only_data_before_now():
         "BBBUSDT": _days(400, 1.0) + [
             Candle(NOW, NOW + timedelta(days=1), 1, 1, 1, 1, 1, 1e12)
         ],
+    }
+    assert select_universe(rules, daily, NOW, size=1) == ["AAAUSDT"]
+
+
+def test_volume_window_is_30_calendar_days_even_with_gaps():
+    rules = _rules("AAA", "BBB")
+    old = _days(370, 1e9, end=NOW - timedelta(days=60))
+    daily = {
+        "AAAUSDT": _days(400, 5.0),
+        "BBBUSDT": old + _days(3, 20.0),  # gap: older candles are outside 30 days
     }
     assert select_universe(rules, daily, NOW, size=1) == ["AAAUSDT"]
