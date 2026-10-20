@@ -117,3 +117,27 @@ def test_symbol_rules_filters_non_usdt_and_halted():
     r = rules["BTCUSDT"]
     assert (r.symbol, r.tick_size, r.step_size, r.min_notional) == ("BTCUSDT", 0.01, 0.001, 5.0)
     assert rules["SOLUSDT"].min_notional == 5.0
+
+
+@respx.mock
+def test_non_json_200_body_raises_binance_error():
+    respx.get(f"{BASE}/api/v3/klines").mock(return_value=httpx.Response(200, text="<html>"))
+    client, _ = make_client()
+    with pytest.raises(BinanceError):
+        client.klines("BTCUSDT", "1h", T0, T0 + timedelta(hours=5))
+
+
+@respx.mock
+def test_malformed_kline_row_raises_binance_error():
+    respx.get(f"{BASE}/api/v3/klines").mock(return_value=httpx.Response(200, json=[[1, "x"]]))
+    client, _ = make_client()
+    with pytest.raises(BinanceError):
+        client.klines("BTCUSDT", "1h", T0, T0 + timedelta(hours=5))
+
+
+@respx.mock
+def test_exchange_info_without_symbols_raises_binance_error():
+    respx.get(f"{BASE}/api/v3/exchangeInfo").mock(return_value=httpx.Response(200, json={}))
+    client, _ = make_client()
+    with pytest.raises(BinanceError):
+        client.symbol_rules()

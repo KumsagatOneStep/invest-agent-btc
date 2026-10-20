@@ -41,7 +41,10 @@ class BinanceClient:
             except httpx.HTTPError as e:
                 raise BinanceError(f"network error on {path}: {e}") from e
             if resp.status_code == 200:
-                return resp.json()
+                try:
+                    return resp.json()
+                except ValueError as e:
+                    raise BinanceError(f"{path}: invalid JSON body") from e
             retryable = resp.status_code == 429 or resp.status_code >= 500
             if not retryable or attempt == len(RETRY_PAUSES):
                 raise BinanceError(f"{path}: HTTP {resp.status_code}")
@@ -64,38 +67,45 @@ class BinanceClient:
                     "limit": PAGE_LIMIT,
                 },
             )
-            for r in rows:
-                if r[6] > end_ms:
-                    continue
-                out.append(
-                    Candle(
-                        _from_ms(r[0]), _from_ms(r[6]),
-                        float(r[1]), float(r[2]), float(r[3]), float(r[4]),
-                        float(r[5]), float(r[7]),
-                    )
-                )  # fmt: skip
+            try:
+                for r in rows:
+                    if r[6] > end_ms:
+                        continue
+                    out.append(
+                        Candle(
+                            _from_ms(r[0]), _from_ms(r[6]),
+                            float(r[1]), float(r[2]), float(r[3]), float(r[4]),
+                            float(r[5]), float(r[7]),
+                        )
+                    )  # fmt: skip
+            except (KeyError, IndexError, TypeError, ValueError) as e:
+                raise BinanceError(f"{symbol}: malformed klines response") from e
             if len(rows) < PAGE_LIMIT:
                 break
             cursor = rows[-1][6] + 1
         return out
 
     def symbol_rules(self) -> dict[str, SymbolRules]:
+        data = self._get("/api/v3/exchangeInfo")
         rules: dict[str, SymbolRules] = {}
-        for s in self._get("/api/v3/exchangeInfo")["symbols"]:
-            if (
-                s.get("status") != "TRADING"
-                or s.get("quoteAsset") != "USDT"
-                or not s.get("isSpotTradingAllowed")
-            ):
-                continue
-            f = {x["filterType"]: x for x in s["filters"]}
-            notional = f.get("NOTIONAL") or f.get("MIN_NOTIONAL")
-            if "PRICE_FILTER" not in f or "LOT_SIZE" not in f or notional is None:
-                continue
-            rules[s["symbol"]] = SymbolRules(
-                s["symbol"],
-                float(f["PRICE_FILTER"]["tickSize"]),
-                float(f["LOT_SIZE"]["stepSize"]),
-                float(notional["minNotional"]),
-            )
+        try:
+            for s in data["symbols"]:
+                if (
+                    s.get("status") != "TRADING"
+                    or s.get("quoteAsset") != "USDT"
+                    or not s.get("isSpotTradingAllowed")
+                ):
+                    continue
+                f = {x["filterType"]: x for x in s["filters"]}
+                notional = f.get("NOTIONAL") or f.get("MIN_NOTIONAL")
+                if "PRICE_FILTER" not in f or "LOT_SIZE" not in f or notional is None:
+                    continue
+                rules[s["symbol"]] = SymbolRules(
+                    s["symbol"],
+                    float(f["PRICE_FILTER"]["tickSize"]),
+                    float(f["LOT_SIZE"]["stepSize"]),
+                    float(notional["minNotional"]),
+                )
+        except (KeyError, IndexError, TypeError, ValueError, AttributeError) as e:
+            raise BinanceError("malformed exchangeInfo response") from e
         return rules

@@ -25,6 +25,8 @@ def usd_kzt(now: datetime, conn: sqlite3.Connection, http: httpx.Client) -> floa
         resp = http.get(URL)
         resp.raise_for_status()
         rate = float(resp.json()["rates"]["KZT"])
+        if not rate > 0:
+            raise ValueError("non-positive rate")
     except (httpx.HTTPError, KeyError, ValueError, TypeError):
         return cached[1] if cached else None
     conn.execute("INSERT OR REPLACE INTO fx VALUES (?, ?)", (now.isoformat(), rate))

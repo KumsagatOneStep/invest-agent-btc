@@ -22,9 +22,7 @@ def test_atr_constant_range_equals_range():
 
 
 def test_atr_uses_gap_and_wilder_seed():
-    df = pd.DataFrame(
-        {"high": [10.0, 15.0], "low": [8.0, 14.0], "close": [9.0, 14.5]}
-    )
+    df = pd.DataFrame({"high": [10.0, 15.0], "low": [8.0, 14.0], "close": [9.0, 14.5]})
     # TR0 = 2 (no prev close), TR1 = max(1, 6, 5) = 6; alpha=0.5 -> 4
     assert atr(df, 2).iloc[1] == pytest.approx(4.0)
 

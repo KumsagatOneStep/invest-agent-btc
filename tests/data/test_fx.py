@@ -42,3 +42,14 @@ def test_fx_falls_back_to_cached_rate():
 def test_fx_none_without_cache():
     respx.get(URL).mock(return_value=httpx.Response(500))
     assert usd_kzt(NOW, conn(), httpx.Client()) is None
+
+
+@respx.mock
+def test_fx_rejects_non_positive_rate():
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"rates": {"KZT": 0}}))
+    assert usd_kzt(NOW, conn(), httpx.Client()) is None
+    c, http = conn(), httpx.Client()
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"rates": {"KZT": 510.5}}))
+    usd_kzt(NOW, c, http)
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"rates": {"KZT": -1}}))
+    assert usd_kzt(NOW + timedelta(days=2), c, http) == 510.5
