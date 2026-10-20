@@ -64,8 +64,8 @@ def _require_idle(conn: sqlite3.Connection, what: str) -> None:
         raise RuntimeError(f"{what} commits and must not be called inside an open transaction")
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path))
+def connect(path: str | Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(path), check_same_thread=check_same_thread)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
