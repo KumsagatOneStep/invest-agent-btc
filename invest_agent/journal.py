@@ -58,6 +58,11 @@ def _dt(s: str | None) -> datetime | None:
     return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
 
 
+def _require_idle(conn: sqlite3.Connection, what: str) -> None:
+    if conn.in_transaction:
+        raise RuntimeError(f"{what} commits and must not be called inside an open transaction")
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA journal_mode=WAL")
@@ -70,6 +75,7 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     Новые строки books: этап 0, start_equity 0 — реальный счёт задаёт start_new_stage.
     """
+    _require_idle(conn, "migrate")
     conn.executescript(_SCHEMA)
     CandleStore.ensure_schema(conn)
     ensure_fx_schema(conn)
@@ -111,6 +117,11 @@ _BOOK_FIELDS = {"stage", "stage_started_at", "start_equity", "peak", "dd_state",
 
 
 class Journal:
+    """Контракт окна: begin_run -> `with conn:` все записи окна -> finish_run.
+
+    begin_run/finish_run коммитят сами и бросают RuntimeError внутри открытой транзакции.
+    """
+
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
 
@@ -157,8 +168,16 @@ class Journal:
         ).fetchall()
         return [PositionRow(*r[:9], _dt(r[9]), r[10]) for r in rows]
 
-    def apply_outcome(self, position_id: int, outcome: Outcome) -> None:
-        qty = self.conn.execute("SELECT qty FROM positions WHERE id=?", (position_id,)).fetchone()[0]
+    def apply_outcome(self, position_id: int, outcome: Outcome) -> bool:
+        """Применяет исход к активной позиции; финальную не трогает (False). Неизвестный id -> KeyError."""
+        row = self.conn.execute(
+            "SELECT qty, status FROM positions WHERE id=?", (position_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(position_id)
+        if row[1] not in ACTIVE:
+            return False
+        qty = row[0]
         pnl = fees = None
         if outcome.status in ("stop", "target", "time"):
             pnl, fees = net_pnl(outcome, qty)
@@ -172,6 +191,7 @@ class Journal:
                 _iso(outcome.exit_time), outcome.exit_price, pnl, fees, position_id,
             ),
         )  # fmt: skip
+        return True
 
     def open_risk(self, book: str) -> list[OpenRisk]:
         return [OpenRisk(p.symbol, p.risk_usdt, p.notional) for p in self.active_positions(book)]
@@ -222,9 +242,10 @@ class Journal:
         return b.start_equity + realized + unrealized
 
     def begin_run(self, window_at: datetime) -> bool:
+        _require_idle(self.conn, "begin_run")
         w = _iso(window_at)
         row = self.conn.execute("SELECT status FROM runs WHERE window_at=?", (w,)).fetchone()
-        if row is not None and row[0] is not None:
+        if row is not None and row[0] == "ok":
             return False
         self.conn.execute(
             "INSERT OR REPLACE INTO runs (window_at, started_at) VALUES (?, ?)",
@@ -234,6 +255,7 @@ class Journal:
         return True
 
     def finish_run(self, window_at: datetime, status: str, error: str | None = None) -> None:
+        _require_idle(self.conn, "finish_run")
         self.conn.execute(
             "UPDATE runs SET finished_at=?, status=?, error=? WHERE window_at=?",
             (_iso(datetime.now(UTC)), status, error, _iso(window_at)),

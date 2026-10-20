@@ -24,6 +24,7 @@ def j() -> Journal:
     jr = Journal(conn)
     jr.start_new_stage("main", 500.0, T0)
     jr.start_new_stage("research", 500.0, T0)
+    conn.commit()
     return jr
 
 
@@ -100,6 +101,46 @@ def test_begin_run_twice_returns_false(j):
     assert j.begin_run(T0) is False
 
 
+def test_begin_run_retry_after_error(j):
+    assert j.begin_run(T0) is True
+    j.finish_run(T0, "error", "binance down")
+    assert j.begin_run(T0) is True
+    row = j.conn.execute("SELECT status, error, finished_at FROM runs").fetchone()
+    assert row == (None, None, None)
+
+
+def test_run_calls_raise_inside_transaction(j):
+    with j.conn:
+        j.add_signal(sig(), "v1")
+        with pytest.raises(RuntimeError):
+            j.begin_run(T0)
+        with pytest.raises(RuntimeError):
+            j.finish_run(T0, "ok")
+        with pytest.raises(RuntimeError):
+            migrate(j.conn)
+
+
+def test_apply_outcome_noop_on_final_position(j):
+    pid = new_pos(j, "main")
+    assert j.apply_outcome(pid, closed("target", 100.0, 110.0)) is True
+    before = j.conn.execute("SELECT * FROM positions WHERE id=?", (pid,)).fetchone()
+    assert j.apply_outcome(pid, Outcome("open", T0, 100.0, None, None)) is False
+    assert j.apply_outcome(pid, closed("stop", 100.0, 95.0)) is False
+    assert j.conn.execute("SELECT * FROM positions WHERE id=?", (pid,)).fetchone() == before
+
+
+def test_apply_outcome_unknown_id(j):
+    with pytest.raises(KeyError):
+        j.apply_outcome(999, closed())
+
+
+def test_foreign_keys_enforced(tmp_path):
+    conn = connect(tmp_path / "fk.db")
+    migrate(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        Journal(conn).add_position(12345, "main", 1, Sizing(1.0, 100.0, 5.0))
+
+
 def test_rejection_is_recorded_with_reason(j):
     sid = j.add_signal(sig(), "v1")
     pid = j.add_position(sid, "main", 1, Rejection("below min notional"))
@@ -119,6 +160,7 @@ def test_migrate_idempotent_keeps_books():
     conn = sqlite3.connect(":memory:")
     migrate(conn)
     Journal(conn).start_new_stage("main", 500.0, T0)
+    conn.commit()
     migrate(conn)
     assert Journal(conn).book("main").start_equity == 500.0
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
