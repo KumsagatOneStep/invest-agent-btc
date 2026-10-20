@@ -33,6 +33,12 @@ def test_expired_when_zone_never_touched():
     assert simulate(sig(), cs, EXP).status == "expired"
 
 
+def test_expiry_covered_by_candle_ending_at_expiry():
+    cs = [candle(i, 105, 106, 104, 105) for i in range(24)]
+    assert cs[-1].close_time < EXP
+    assert simulate(sig(), cs, EXP).status == "expired"
+
+
 def test_entry_at_worst_price_plus_slippage():
     out = simulate(sig(), [candle(0, 101, 102, 99.5, 101)], EXP)
     assert out.status == "open"
@@ -76,7 +82,7 @@ def test_time_exit_after_10_days():
     cs = [candle(i, 101, 102, 99.5 if i == 0 else 100, 101.5) for i in range(241)]
     out = simulate(sig(), cs, EXP)
     assert out.status == "time"
-    assert out.exit_time == cs[240].close_time
+    assert out.exit_time == cs[239].close_time
     assert out.exit_price == pytest.approx(101.5 * (1 - SLIPPAGE))
 
 

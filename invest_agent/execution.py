@@ -4,6 +4,10 @@ from invest_agent.config import FEE, MAX_HOLD, SLIPPAGE
 from invest_agent.models import Candle, Outcome, SignalCandidate
 
 
+def _end(c: Candle) -> datetime:
+    return c.close_time + timedelta(milliseconds=1)
+
+
 def _stop_exit(c: Candle, sig: SignalCandidate) -> float:
     return min(c.open, sig.stop) * (1 - SLIPPAGE)
 
@@ -20,7 +24,7 @@ def simulate(sig: SignalCandidate, candles_1h: list[Candle], expires_at: datetim
         None,
     )
     if entry_idx is None:
-        covered = bool(candles) and candles[-1].close_time >= expires_at
+        covered = bool(candles) and _end(candles[-1]) >= expires_at
         return Outcome("expired" if covered else "pending", None, None, None, None)
 
     entry_time = candles[entry_idx].open_time
@@ -32,7 +36,7 @@ def simulate(sig: SignalCandidate, candles_1h: list[Candle], expires_at: datetim
             return Outcome("stop", entry_time, entry_price, c.close_time, _stop_exit(c, sig))
         if i > entry_idx and c.high >= sig.target:
             return Outcome("target", entry_time, entry_price, c.close_time, sig.target * (1 - SLIPPAGE))
-        if c.close_time >= entry_time + MAX_HOLD:
+        if _end(c) >= entry_time + MAX_HOLD:
             return Outcome("time", entry_time, entry_price, c.close_time, c.close * (1 - SLIPPAGE))
     return Outcome("open", entry_time, entry_price, None, None)
 
