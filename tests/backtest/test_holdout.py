@@ -98,3 +98,4 @@ def test_holdout_logs_code_hash_and_passes_windows(tmp_path, monkeypatch):
     assert seen["windows_utc"] == windows
     entry = log.entries()[TrendBreakout().version()]
     assert entry["summary"]["code_hash"] == code_hash()
+    assert entry["summary"]["windows_utc"] == ["04:00:00"]

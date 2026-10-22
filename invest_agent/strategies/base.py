@@ -13,7 +13,10 @@ from invest_agent.models import SignalCandidate
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 # Модули, от которых зависят сигналы и результат бэктеста: их правка = новая версия стратегии
-TRACKED = ("indicators.py", "execution.py", "risk.py", "universe.py", "backtest/engine.py")
+TRACKED = (
+    "config.py", "models.py", "indicators.py", "execution.py", "risk.py", "universe.py",
+    "data/candles.py", "backtest/engine.py", "backtest/gate.py",
+)  # fmt: skip
 ATR_N = 14
 ENTRY_ATR_FRAC = 0.25
 

@@ -143,6 +143,7 @@ def test_code_hash_covers_signal_and_backtest_modules():
     for expected in (
         "strategies/base.py", "strategies/trend.py", "strategies/meanrev.py",
         "indicators.py", "execution.py", "risk.py", "universe.py", "backtest/engine.py",
+        "config.py", "models.py", "data/candles.py", "backtest/gate.py",
     ):  # fmt: skip
         assert expected in names
 

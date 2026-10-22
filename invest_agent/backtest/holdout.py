@@ -81,6 +81,7 @@ def run_holdout(
         "name": strategy.name,
         "params": strategy.params,
         "period": [period.start.isoformat(), period.end.isoformat()],
+        "windows_utc": [w.isoformat() for w in windows_utc],
         "code_hash": code_hash(),  # для аудита: какой код прошёл holdout
     }
     log.record(version, verdict, summary)
