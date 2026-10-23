@@ -73,12 +73,18 @@ def size_position(
 
 def round_prices(sig: SignalCandidate, rules: SymbolRules) -> SignalCandidate:
     t = rules.tick_size
+    entry_high = floor_step(sig.entry_high, t)
+    stop = floor_step(sig.stop, t)
+    target = floor_step(sig.target, t)
+    # цель ровно на MIN_RR после округления стопа/цели вниз дала бы rr чуть меньше 1,5
+    if sig.target - sig.entry_high >= MIN_RR * (sig.entry_high - sig.stop) * (1 - 1e-12):
+        target = max(target, ceil_step(entry_high + MIN_RR * (entry_high - stop), t))
     return replace(
         sig,
         entry_low=ceil_step(sig.entry_low, t),
-        entry_high=floor_step(sig.entry_high, t),
-        stop=floor_step(sig.stop, t),
-        target=floor_step(sig.target, t),
+        entry_high=entry_high,
+        stop=stop,
+        target=target,
     )
 
 

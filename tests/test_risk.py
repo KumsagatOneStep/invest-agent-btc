@@ -110,3 +110,15 @@ def test_rounding_stop_to_zero_is_rejected():
     assert rounded.stop == 0
     r = size_position(rounded, 400.0, 0.01, [], rules)
     assert isinstance(r, Rejection) and r.reason == "entry zone invalid after rounding"
+
+
+def test_rounding_keeps_min_rr_signal_tradeable():
+    # стоп округляется вниз → риск растёт на тик; цель ровно на MIN_RR не должна стать rr<1.5
+    raw = sig(entry_low=99.0, entry_high=100.0, stop=95.005, target=100.0 + 1.5 * 4.995)
+    rounded = round_prices(raw, RULES)
+    assert rounded.target == 107.5
+    assert isinstance(size_position(rounded, 400.0, 0.01, [], RULES), Sizing)
+
+
+def test_rounding_does_not_lift_target_below_min_rr():
+    assert round_prices(sig(target=107.0), RULES).target == 107.0
